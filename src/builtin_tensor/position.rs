@@ -16,6 +16,13 @@ impl Borrow<[isize]> for Position{
 impl BorrowMut<[isize]> for Position{
 	fn borrow_mut(&mut self)->&mut [isize]{&mut *self}
 }
+impl Clone for Position{
+	fn clone(&self)->Self{Self(self.0.clone())}
+	fn clone_from(&mut self,other:&Self){
+		if self.rank()==other.rank(){self.copy_from_slice(other)}
+		else{self.0.clone_from(&other.0)}
+	}
+}
 impl Deref for Position{
 	fn deref(&self)->&Self::Target{self.as_ref()}
 	type Target=[isize];
@@ -250,6 +257,58 @@ impl Iterator for PositionIter{
 	}
 	type Item=Position;
 }
+impl<P:SignedIndexPosition> PartialEq<(&[P],&[usize])> for Position{
+	fn eq(&self,other:&(&[P],&[usize]))->bool{self.partial_cmp(other)==Some(Ordering::Equal)}
+	fn ne(&self,other:&(&[P],&[usize]))->bool{self.partial_cmp(other)!=Some(Ordering::Equal)}
+}
+impl<P:SignedIndexPosition> PartialEq<(&[P],&Layout)> for Position{
+	fn eq(&self,other:&(&[P],&Layout))->bool{*self==(other.0,&**other.1.dims())}
+	fn ne(&self,other:&(&[P],&Layout))->bool{*self!=(other.0,&**other.1.dims())}
+}
+impl PartialEq for Position{
+	fn eq(&self,other:&Self)->bool{self.partial_cmp(other)==Some(Ordering::Equal)}
+	fn ne(&self,other:&Self)->bool{self.partial_cmp(other)!=Some(Ordering::Equal)}
+}
+impl<P:SignedIndexPosition> PartialOrd<(&[P],&[usize])> for Position{
+	fn partial_cmp(&self,other:&(&[P],&[usize]))->Option<Ordering>{
+		let (qx,dims)=other;
+		let px=self.as_slice();
+
+		let rank=dims.len();
+		if px.len()!=rank||qx.len()!=rank{return None}
+
+		for ix in 0..rank{
+			let dim=dims[ix];
+			let px=if let Some(px)=unsign_position(dim,px[ix]){px}else{return None};
+			let qx=if let Some(qx)=unsign_position(dim,qx[ix]){qx}else{return None};
+
+			match px.cmp(&qx){
+				Ordering::Equal=>continue,
+				o=>return Some(o)
+			}
+		}
+		Some(Ordering::Equal)
+	}
+}
+impl<P:SignedIndexPosition> PartialOrd<(&[P],&Layout)> for Position{
+	fn partial_cmp(&self,other:&(&[P],&Layout))->Option<Ordering>{self.partial_cmp(&(other.0,&**other.1.dims()))}
+}
+impl PartialOrd for Position{
+	fn partial_cmp(&self,other:&Self)->Option<Ordering>{
+		let (px,qx)=(self.as_slice(),other.as_slice());
+		let rank=px.len();
+
+		if qx.len()!=rank{return None}
+
+		for ix in 0..rank{
+			match px[ix].cmp(&qx[ix]){
+				Ordering::Equal=>continue,
+				o=>return Some(o)
+			}
+		}
+		Some(Ordering::Equal)
+	}
+}
 impl<I:Copy+TryFrom<isize>+TryInto<isize>> SignedIndexPosition for I{}
 impl TryFrom<Layout> for PositionIter{
 	fn try_from(layout:Layout)->Result<Self>{
@@ -327,8 +386,6 @@ impl Position{
 	pub fn decrement(&mut self,dims:&[usize])->usize{decrement_position(dims,self)}
 	/// creates a new position whose coordinates are all -1
 	pub fn end(rank:usize)->Self{Self(vec![-1;rank].into())}
-	/// check if these positions refer to the same component
-	pub fn equals<P:SignedIndexPosition>(&self,dims:&[usize],position:&[P])->bool{equals_position(dims,self,position)}
 	/// advance position by 1
 	pub fn increment(&mut self,dims:&[usize])->usize{increment_position(dims,self)}
 	/// convert the indices to their unsigned forms
@@ -351,6 +408,17 @@ impl Position{
 
 		Some(Self(Arc::from(position.as_slice())))
 	}
+	/// create a position from an iter of optional isize.  returns none if any of the coordinates can't be unwrapped
+	pub fn try_from_iter(coordinates:impl IntoIterator<Item=Option<isize>>)->Option<Self>{
+		let coordinates=coordinates.into_iter();
+
+		let mut position=Vec::with_capacity(coordinates.size_hint().0);
+		for px in coordinates{
+			position.push(px?);
+		}
+
+		Some(Self(Arc::from(position.as_slice())))
+	}
 	/// convert the indices to their unsigned forms
 	pub fn unsign(&mut self,dims:&[usize])->Option<&[usize]>{
 		assert_eq!(dims.len(),self.len());
@@ -362,6 +430,14 @@ impl Position{
 
 #[cfg(test)]
 mod tests{
+	#[test]
+	fn position_offset(){
+		let dims=vec![4,6];
+		let strides=vec![2,10];
+
+		assert_eq!(compute_offset(&dims,&[2,3],&strides),34);
+		assert_eq!(checked_offset(&dims,&[5,4],&strides).unwrap_err(),Error::out_of_bounds(Layout::from_inner(dims.clone(),strides.clone()),"offset",Position::from([5,4])));
+	}
 	#[test]
 	fn position_iter_collect(){
 		let expected:Vec<[isize;2]>=vec![[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]];
@@ -463,7 +539,8 @@ pub fn cast_to_unsigned_mut(position:&mut [isize])->&mut [usize]{
 	let rank=position.len();
 	unsafe{slice::from_raw_parts_mut(position.as_ptr() as *mut usize,rank)}
 }
-/// compare if two positions refer to the same component.
+#[track_caller]
+/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
 pub fn compare_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->Ordering{
 	let rank=dims.len();
 	if px.len()!=rank||qx.len()!=rank{panic!("mismatched rank")}
@@ -482,13 +559,16 @@ pub fn compare_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usiz
 }
 /// counts the components by taking the product of the dims
 pub fn component_count(dims:&[usize])->usize{dims.iter().product()}
+#[track_caller]
 /// computes the offset of a component
 pub fn compute_offset<I:SignedIndexPosition>(dims:&[usize],position:&[I],strides:&[isize])->usize{
-	dims.iter().zip(position.iter()).zip(strides.iter()).fold(0,|acc,((&dim,&px),&stride)|{
-		let mut px=px.try_into().ok().unwrap();
-		if stride<0{px=!px}
+	dims.iter().rev().zip(position.iter().rev()).zip(strides.iter().rev()).fold(0,|acc,((&dim,px),&stride)|{
+		let mut px=px.expect_isize("coordinates must fit in isize");
 
-		acc+unsign_position(dim,px).unwrap()*stride.abs() as usize
+		if stride<0{px=!px}
+		if px<0{px+=dim as isize}
+
+		acc+px as usize*stride.abs() as usize
 	})
 }
 /// rewind the position by 1. see rewind_position for more details
@@ -506,7 +586,7 @@ pub fn decrement_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P]
 	1
 }
 #[track_caller]
-/// compare if two positions refer to the same component.
+/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
 pub fn equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Equal}
 /// internal iteration over positions that lacks the overhead of the tricks PositionIter and Position use to avoid cloning. the iteration will start if the dims don't contain 0. the iteration will stop after reaching a state where each position is one less than the corresponding dim, when it rolls over to all 0. dims should be <= isize::MAX
 pub fn for_positions<F:FnMut(&mut [P])->ControlFlow<()>,P:SignedIndexPosition>(dims:&[usize],mut f:F,position:&mut [P]){
@@ -520,10 +600,10 @@ pub fn for_positions<F:FnMut(&mut [P])->ControlFlow<()>,P:SignedIndexPosition>(d
 	}
 }
 #[track_caller]
-/// compare if two positions refer to the same component.
+/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
 pub fn greater_equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)!=Ordering::Less}
 #[track_caller]
-/// compare if two positions refer to the same component.
+/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
 pub fn greater_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Greater}
 /// advance the position by 1. see advance_position for more details
 pub fn increment_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P])->usize{
@@ -588,12 +668,12 @@ pub fn unsign_position(dim:usize,position:impl SignedIndexPosition)->Option<usiz
 }
 /// computes the unsigned index given a signed index. If the index is < -rank, >= rank, or not castable to isize, returns None. If index<0, returns the value of dim+index. Otherwise, returns the value of index
 pub fn unsign_index(index:impl SignedIndexPosition,rank:usize)->Option<usize>{unsign_position(rank,index)}
-/// computes the unsigned end of range given a signed end of range. unlike unsign_position(dim,stop), when dim==stop, this returns dim rather than none
-pub fn unsign_range_stop(dim:usize,stop:impl SignedIndexPosition)->Option<usize>{
-	let stop=stop.try_into().ok()?;
-	if dim as isize==stop{return Some(dim)}
+/// computes the unsigned start or end of range given a signed end of range. unlike unsign_position(dim,stop), when dim==stop, this returns dim rather than none
+pub fn unsign_range_bound(dim:usize,rb:impl SignedIndexPosition)->Option<usize>{
+	let rb=rb.try_into().ok()?;
+	if dim as isize==rb{return Some(dim)}
 
-	unsign_position(dim,stop)
+	unsign_position(dim,rb)
 }
 #[track_caller]
 /// unsign a slice of positions
@@ -605,10 +685,10 @@ pub fn unsign_position_slice<'a,P:SignedIndexPosition>(dims:&[usize],positions:&
 #[derive(Clone,Debug,Default)]
 /// iterates over positions in a tensor
 pub struct PositionIter{layout:Layout,front:Option<Position>,back:Option<Position>}
-#[derive(Clone,Debug,Default,Eq,Hash,Ord,PartialEq,PartialOrd)]
+#[derive(Debug,Default)]
 #[cfg_attr(feature="serial",derive(Deserialize,Serialize))]
 #[repr(transparent)]
-/// wraps a signed tensor position stored as a reference counted slice of isize. Note that although comparisons are implemented, they can't treat positive and negative indices that correspond to the same components as the same because a position does not contain dims
+/// wraps a signed tensor position stored as a reference counted slice of isize. Note that since the positions don't contain the dims, two positions alone cannot always be determined to refer or not refer to the same component in the case of negative positioning. Therefore, despite their PartialOrd implementation, one may want to compare positions using the position module's comparison functions instead, which include a dims argument
 pub struct Position(Arc<[isize]>);
 #[derive(Clone,Debug,Default)]
 /// into iterator for Position
@@ -627,6 +707,6 @@ pub trait SignedIndexPosition:Copy+TryFrom<isize>+TryInto<isize>{
 #[cfg(feature="serial")]
 use serde::{Deserialize,Serialize};
 use std::{
-	borrow::{Borrow,BorrowMut},cmp::{Ord,Ordering},fmt::{Display,Formatter,Result as FmtResult},iter::{FromIterator,self},ops::{ControlFlow,Deref,DerefMut,Index,IndexMut,Range},slice::{Iter as SliceIter,IterMut as SliceIterMut,self},sync::Arc
+	borrow::{Borrow,BorrowMut},cmp::{Ord,Ordering,PartialEq,PartialOrd},fmt::{Display,Formatter,Result as FmtResult},iter::{FromIterator,self},ops::{ControlFlow,Deref,DerefMut,Index,IndexMut,Range},slice::{Iter as SliceIter,IterMut as SliceIterMut,self},sync::Arc
 };
 use super::{Error,Layout,Result,error};

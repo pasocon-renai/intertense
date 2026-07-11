@@ -287,7 +287,7 @@ pub enum ErrorKind{
 	/// Placeholder default value for when the variant has not yet been constructed. Library code should generally avoid returning this.
 	Unknown=0,
 }
-#[derive(Clone,Debug,Default)]
+#[derive(Clone,Debug,Default,PartialEq)]
 /// tensor operation error
 pub struct Error{layout:Layout,kind:ErrorKind,op:&'static str,rhslayout:Option<Layout>}
 /// tensor result type
