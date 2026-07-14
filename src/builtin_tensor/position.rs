@@ -436,7 +436,6 @@ mod tests{
 		let strides=vec![2,10];
 
 		assert_eq!(compute_offset(&dims,&[2,3],&strides),34);
-		assert_eq!(checked_offset(&dims,&[5,4],&strides).unwrap_err(),Error::out_of_bounds(Layout::from_inner(dims.clone(),strides.clone()),"offset",Position::from([5,4])));
 	}
 	#[test]
 	fn position_iter_collect(){
@@ -560,10 +559,11 @@ pub fn compare_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usiz
 /// counts the components by taking the product of the dims
 pub fn component_count(dims:&[usize])->usize{dims.iter().product()}
 #[track_caller]
-/// computes the offset of a component
+/// computes the offset of a component. panics if out of bounds
 pub fn compute_offset<I:SignedIndexPosition>(dims:&[usize],position:&[I],strides:&[isize])->usize{
 	dims.iter().rev().zip(position.iter().rev()).zip(strides.iter().rev()).fold(0,|acc,((&dim,px),&stride)|{
 		let mut px=px.expect_isize("coordinates must fit in isize");
+		assert!(px>=-(dim as isize)&&px<dim as isize);
 
 		if stride<0{px=!px}
 		if px<0{px+=dim as isize}

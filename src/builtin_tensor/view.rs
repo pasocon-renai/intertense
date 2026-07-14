@@ -1,306 +1,649 @@
-impl<E> AsRef <View<E>>    for Tensor<E>{
-	fn as_ref    (&    self)->&    View<E>{self.as_view()}
+impl<'a,E> AsRef<Self   > for ViewRef<'a,E>{
+	fn as_ref(&self)->&Self{self}
 }
-impl<E> AsMut <View<E>>    for Tensor<E>{
-	fn as_mut    (&mut self)->&mut View<E>{self.as_mut_view()}
+impl<'a,E> AsRef<Self   > for ViewMut<'a,E>{
+	fn as_ref(&self)->&Self{self}
 }
-impl<E> Borrow<View<E>>    for Tensor<E>{
-	fn borrow    (&    self)->&    View<E>{self.as_view()}
+impl<   E> AsRef<Self   > for View<E>{
+	fn as_ref(&self)->&Self{self}
 }
-impl<E> BorrowMut<View<E>> for Tensor<E>{
-	fn borrow_mut(&mut self)->&mut View<E>{self.as_mut_view()}
+impl<'a,E> AsRef<View<E>> for ViewRef<'a,E>{
+	fn as_ref(&    self)->&    View<E>{self.0.as_view()}
 }
-impl<E:Clone> Clone        for Tensor<E>{
-	fn clone(&self)->Self{self.view().to_owned()}
-	/*fn clone_from(&mut self,other:&Self)->Self{
-
-	}*/
+impl<'a,E> AsRef<View<E>> for ViewMut<'a,E>{
+	fn as_ref(&    self)->&    View<E>{self.0.as_view()}
 }
-impl<E> Deref              for Tensor<E>{
-	fn deref(&self)->&View<E>{self.as_view()}
+impl<'a,E> AsMut<Self   > for ViewRef<'a,E>{
+	fn as_mut(&mut self)->&mut Self{self}
+}
+impl<'a,E> AsMut<Self   > for ViewMut<'a,E>{
+	fn as_mut(&mut self)->&mut Self{self}
+}
+impl<   E> AsMut<Self   > for View<E>{
+	fn as_mut(&mut self)->&mut Self{self}
+}
+impl<'a,E> AsMut    <View<E>> for ViewMut<'a,E>{
+	fn as_mut(&mut     self)->&mut View<E>{self.0.as_mut_view()}
+}
+impl<'a,E> Borrow   <View<E>> for ViewRef<'a,E>{
+	fn borrow(&        self)->&    View<E>{self.0.as_view()}
+}
+impl<'a,E> Borrow   <View<E>> for ViewMut<'a,E>{
+	fn borrow(&        self)->&    View<E>{self.0.as_view()}
+}
+impl<'a,E> BorrowMut<View<E>> for ViewMut<'a,E>{
+	fn borrow_mut(&mut self)->&mut View<E>{self.0.as_mut_view()}
+}
+impl<'a,E> Clone for ViewRef<'a,E>{
+	fn clone(&self)->Self{
+		unsafe{		// safety: viewref is constructed with the same preconditions
+			from_raw_parts(self.0.get_layout(),self.0.as_ptr(),self.0.buffer_len())
+		}
+	}
+}
+impl<'a,E:Debug> Debug for ViewRef<'a,E>{
+	fn fmt(&self,f:&mut Formatter<'_>)->FmtResult{
+		#[allow(unused)]
+		#[derive(Debug)]
+		struct ViewRef<'a,E:'a>{data:Vec<&'a E>,dims:&'a [usize]}
+		ViewRef{
+			data:self.positions().filter_map(|px|self.component(&px).ok()).collect(),
+			dims:self.dims()
+		}.fmt(f)
+	}
+}
+impl<'a,E:Debug> Debug for ViewMut<'a,E>{
+	fn fmt(&self,f:&mut Formatter<'_>)->FmtResult{
+		#[allow(unused)]
+		#[derive(Debug)]
+		struct ViewMut<'a,E:'a>{data:Vec<&'a E>,dims:&'a [usize]}
+		ViewMut{
+			data:self.positions().filter_map(|px|self.component(&px).ok()).collect(),
+			dims:self.dims()
+		}.fmt(f)
+	}
+}
+impl<'a,E:Debug> Debug for View<E>{
+	fn fmt(&self,f:&mut Formatter<'_>)->FmtResult{
+		#[allow(unused)]
+		#[derive(Debug)]
+		struct View<'a,E:'a>{data:Vec<&'a E>,dims:&'a [usize]}
+		View{
+			data:self.positions().filter_map(|px|self.component(&px).ok()).collect(),
+			dims:self.dims()
+		}.fmt(f)
+	}
+}
+impl<'a,E> Default  for ViewRef<'a,E>{
+	fn default()->Self{Self::empty(1)}
+}
+impl<'a,E> Default  for ViewMut<'a,E>{
+	fn default()->Self{Self::empty(1)}
+}
+impl<'a,E> Deref    for ViewRef<'a,E>{
+	fn deref(&self)->&Self::Target{self.0.deref()}
 	type Target=View<E>;
 }
-impl<E> DerefMut           for Tensor<E>{
-	fn deref_mut(&mut self)->&mut View<E>{self.as_mut_view()}
+impl<'a,E> Deref    for ViewMut<'a,E>{
+	fn deref(&self)->&Self::Target{self.0.deref()}
+	type Target=View<E>;
 }
-impl<E> Drop for View<E>{
-	fn drop(&mut self){
-		let (ptr,len,cap)=(self.ptr,self.len,self.cap);
-		unsafe{			// for safety, a valid buffer is maintained when cap>0. If cap==0, this is a field of a borrowed view and should not be dropped.
-			if cap==0{return}
-			mem::drop(Vec::from_raw_parts(ptr,len,cap));
+impl<'a,E> DerefMut for ViewMut<'a,E>{
+	fn deref_mut(&mut self)->&mut Self::Target{self.0.deref_mut()}
+}
+impl<'a,E:Eq  > Eq   for ViewRef<'a,E>{}
+impl<'a,E:Eq  > Eq   for ViewMut<'a,E>{}
+impl<   E:Eq  > Eq   for View   <   E>{}
+impl<'a,E:Hash> Hash for ViewRef<'a,E>{
+	fn hash<H:Hasher>(&self,state:&mut H){(**self).hash(state)}
+}
+impl<'a,E:Hash> Hash for ViewMut<'a,E>{
+	fn hash<H:Hasher>(&self,state:&mut H){(**self).hash(state)}
+}
+impl<   E:Hash> Hash for View   <   E>{
+	fn hash<H:Hasher>(&self,state:&mut H){
+		if self.validate().is_ok(){
+			self.dims().hash(state);
+			self.positions().for_each(|px|self[px].hash(state));
+		}else{
+			let inner=&self.0[0];
+			assert!(inner.buffer_cap()>0);	// TODO this *should* be the case, but I have a feeling we need a slightly stronger unsafe condition somewhere to eliminate this assertion
+
+			inner.layout().hash(state);
+			inner.buffer().hash(state);
 		}
 	}
 }
-impl<E:Eq> Eq for View<E>{}
-impl<E:Eq> Eq for Tensor<E>{}
-impl<E,P:SignedIndexPosition,const N:usize> Index<[P;N]> for View<E>{
+impl<'a,E,P:SignedIndexPosition> Index<&[P]> for ViewRef<'a,E>{
+	fn index(&self,position:&[P])->&Self::Output{self.as_view().index(position)}
+	type Output=E;
+}
+impl<'a,E,P:SignedIndexPosition> Index<&[P]> for ViewMut<'a,E>{
+	fn index(&self,position:&[P])->&Self::Output{self.as_view().index(position)}
+	type Output=E;
+}
+impl<   E,P:SignedIndexPosition> Index<&[P]> for View<E>{
+	#[track_caller]
+	fn index(&self,position:&[P])->&Self::Output{
+		let (dims,strides)=(self.dims(),self.strides());
+		// error::unwrap_or_panic(error::check_bounds(dims,position).map_err(|e|e.with_op("index"))); // since we're panicing on out of bounds anyway, just use compute_offset's panic
+
+		unsafe{		// safety: "valid layouts (in general not just for buffer) stored by the resulting Tens must never produce an offset less than len for which ptr+offset not valid for conversion to a shared reference" - Tens precondition. "If cap>0, (ptr, len, cap) must be ok to convert to Vec." - Tens precondition. View with cap==0 are created in from_raw_parts, from_raw_parts_mut, or empty, which require valid layouts, and any offset of ptr reachable through a position in bounds of the layout must be simultaneously valid as a shared reference. View with cap>0 are created from Tens with cap>0 condition, which implies anywhere in the buffer can be shared referenced.
+			let offset=position::compute_offset(dims,position,strides);
+			let ptr=self.as_ptr();
+
+			if offset>self.get_len(){return error::unwrap_or_panic(Err(Error::invalid_layout(self.get_layout(),"index")))}
+			&    *ptr.add(offset)
+		}
+	}
+	type Output=E;
+}
+impl<'a,E,P:SignedIndexPosition,const N:usize> Index<[P;N]> for ViewRef<'a,E>{
 	#[track_caller]
 	fn index(&self,index:[P;N])->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E,P:SignedIndexPosition,const N:usize> Index<[P;N]> for Tensor<E>{
+impl<'a,E,P:SignedIndexPosition,const N:usize> Index<[P;N]> for ViewMut<'a,E>{
 	#[track_caller]
 	fn index(&self,index:[P;N])->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E> Index<Position> for View<E>{
+impl<   E,P:SignedIndexPosition,const N:usize> Index<[P;N]> for View<E>{
+	#[track_caller]
+	fn index(&self,index:[P;N])->&Self::Output{self.index(index.as_slice())}
+	type Output=E;
+}
+impl<'a,E> Index< Position> for ViewRef<'a,E>{
 	#[track_caller]
 	fn index(&self,index:Position)->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E> Index<Position> for Tensor<E>{
+impl<'a,E> Index< Position> for ViewMut<'a,E>{
 	#[track_caller]
 	fn index(&self,index:Position)->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E> Index<&Position> for View<E>{
+impl<   E> Index< Position> for View<E>{
+	#[track_caller]
+	fn index(&self,index:Position)->&Self::Output{self.index(index.as_slice())}
+	type Output=E;
+}
+impl<'a,E> Index<&Position> for ViewRef<'a,E>{
 	#[track_caller]
 	fn index(&self,index:&Position)->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E> Index<&Position> for Tensor<E>{
+impl<'a,E> Index<&Position> for ViewMut<'a,E>{
 	#[track_caller]
 	fn index(&self,index:&Position)->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E,P:SignedIndexPosition> Index<&[P]> for Tensor<E>{
+impl<   E> Index<&Position> for View<E>{
 	#[track_caller]
-	fn index(&self,index:&[P])->&Self::Output{self.as_view().index(index)}
+	fn index(&self,index:&Position)->&Self::Output{self.index(index.as_slice())}
 	type Output=E;
 }
-impl<E,P:SignedIndexPosition> Index<&[P]> for View<E>{
+impl<'a,E,P:SignedIndexPosition> IndexMut<&[P]> for ViewMut<'a,E>{
 	#[track_caller]
-	fn index(&self,index:&[P])->&Self::Output{
-		let i=self.layout.compute_offset(index);
-		self.data().index(i)
+	fn index_mut(&mut self,position:&[P])->&mut Self::Output{self.as_mut_view().index_mut(position)}
+}
+impl<   E,P:SignedIndexPosition> IndexMut<&[P]> for View<E>{
+	#[track_caller]
+	fn index_mut(&mut self,position:&[P])->&mut Self::Output{
+		let (dims,strides)=(self.dims(),self.strides());
+		// error::unwrap_or_panic(error::check_bounds(dims,position).map_err(|e|e.with_op("index"))); // since we're panicing on out of bounds anyway, just use compute_offset's panic
+
+		unsafe{		// safety: "valid layouts (in general not just for buffer) stored by the resulting Tens must never produce an offset less than len for which ptr+offset not valid for conversion to a shared reference, and if the buffer will be mutated, temporary conversion to a mutable reference" - Tens precondition. "If cap>0, (ptr, len, cap) must be ok to convert to Vec." - Tens precondition. View with cap==0 are created in from_raw_parts, from_raw_parts_mut, or empty. from_raw_parts_mut requires valid layouts, and any offset of ptr reachable through a position in bounds of the layout must be simultaneously valid as a mutable reference, and from_raw_parts returns a ViewRef which only allows shared View references. View with cap>0 are created from Tens with cap>0 condition, which implies anywhere in the buffer can be mutable referenced.
+			let offset=position::compute_offset(dims,position,strides);
+			let ptr=self.as_mut_ptr();
+
+			if offset>self.get_len(){return error::unwrap_or_panic(Err(Error::invalid_layout(self.get_layout(),"index")))}
+			&mut *ptr.add(offset)
+		}
 	}
-	type Output=E;
 }
-impl<E,P:SignedIndexPosition,const N:usize> IndexMut<[P;N]> for View<E>{
+impl<'a,E,P:SignedIndexPosition,const N:usize> IndexMut<[P;N]> for ViewMut<'a,E>{
 	#[track_caller]
 	fn index_mut(&mut self,index:[P;N])->&mut Self::Output{self.index_mut(index.as_slice())}
 }
-impl<E,P:SignedIndexPosition,const N:usize> IndexMut<[P;N]> for Tensor<E>{
+impl<   E,P:SignedIndexPosition,const N:usize> IndexMut<[P;N]> for View<E>{
 	#[track_caller]
 	fn index_mut(&mut self,index:[P;N])->&mut Self::Output{self.index_mut(index.as_slice())}
 }
-impl<E> IndexMut<Position> for View<E>{
+impl<'a,E> IndexMut< Position> for ViewMut<'a,E>{
 	#[track_caller]
 	fn index_mut(&mut self,index:Position)->&mut Self::Output{self.index_mut(index.as_slice())}
 }
-impl<E> IndexMut<Position> for Tensor<E>{
+impl<   E> IndexMut< Position> for View<E>{
 	#[track_caller]
 	fn index_mut(&mut self,index:Position)->&mut Self::Output{self.index_mut(index.as_slice())}
 }
-impl<E> IndexMut<&Position> for View<E>{
+impl<'a,E> IndexMut<&Position> for ViewMut<'a,E>{
 	#[track_caller]
 	fn index_mut(&mut self,index:&Position)->&mut Self::Output{self.index_mut(index.as_slice())}
 }
-impl<E> IndexMut<&Position> for Tensor<E>{
+impl<   E> IndexMut<&Position> for View<E>{
 	#[track_caller]
 	fn index_mut(&mut self,index:&Position)->&mut Self::Output{self.index_mut(index.as_slice())}
 }
-impl<E,P:SignedIndexPosition> IndexMut<&[P]> for Tensor<E>{
-	#[track_caller]
-	fn index_mut(&mut self,index:&[P])->&mut Self::Output{self.as_mut_view().index_mut(index)}
+impl<'a   ,E:PartialEq<X>,X> PartialEq<Tensor <X    >> for ViewRef<'a,E>{
+	fn eq(&self,other:&Tensor <   X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&Tensor <   X>)->bool{(**self)!=(**other)}
 }
-impl<E,P:SignedIndexPosition> IndexMut<&[P]> for View<E>{
-	#[track_caller]
-	fn index_mut(&mut self,index:&[P])->&mut Self::Output{
-		let i=self.layout.compute_offset(index);
-		self.data_mut().index_mut(i)
+impl<'a   ,E:PartialEq<X>,X> PartialEq<Tensor <X    >> for ViewMut<'a,E>{
+	fn eq(&self,other:&Tensor <   X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&Tensor <   X>)->bool{(**self)!=(**other)}
+}
+impl<      E:PartialEq<X>,X> PartialEq<Tensor <X    >> for View<E>{
+	fn eq(&self,other:&Tensor <   X>)->bool{(*self)==(**other)}
+	fn ne(&self,other:&Tensor <   X>)->bool{(*self)!=(**other)}
+}
+impl<'a   ,E:PartialEq<X>,X> PartialEq<Tens   <X    >> for ViewRef<'a,E>{
+	fn eq(&self,other:&Tens   <   X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&Tens   <   X>)->bool{(**self)!=(**other)}
+}
+impl<'a   ,E:PartialEq<X>,X> PartialEq<Tens   <X   >> for ViewMut<'a,E>{
+	fn eq(&self,other:&Tens   <   X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&Tens   <   X>)->bool{(**self)!=(**other)}
+}
+impl<      E:PartialEq<X>,X> PartialEq<Tens   <X   >> for View<E>{
+	fn eq(&self,other:&Tens   <   X>)->bool{( *self)==(**other)}
+	fn ne(&self,other:&Tens   <   X>)->bool{( *self)!=(**other)}
+}
+impl<'a,'b,E:PartialEq<X>,X> PartialEq<ViewRef<'b,X>> for ViewRef<'a,E>{
+	fn eq(&self,other:&ViewRef<'b,X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&ViewRef<'b,X>)->bool{(**self)!=(**other)}
+}
+impl<'a,'b,E:PartialEq<X>,X> PartialEq<ViewRef<'b,X>> for ViewMut<'a,E>{
+	fn eq(&self,other:&ViewRef<'b,X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&ViewRef<'b,X>)->bool{(**self)!=(**other)}
+}
+impl<   'b,E:PartialEq<X>,X> PartialEq<ViewRef<'b,X>> for View<E>{
+	fn eq(&self,other:&ViewRef<'b,X>)->bool{( *self)==(**other)}
+	fn ne(&self,other:&ViewRef<'b,X>)->bool{( *self)!=(**other)}
+}
+impl<'a,'b,E:PartialEq<X>,X> PartialEq<ViewMut<'b,X>> for ViewRef<'a,E>{
+	fn eq(&self,other:&ViewMut<'b,X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&ViewMut<'b,X>)->bool{(**self)!=(**other)}
+}
+impl<'a,'b,E:PartialEq<X>,X> PartialEq<ViewMut<'b,X>> for ViewMut<'a,E>{
+	fn eq(&self,other:&ViewMut<'b,X>)->bool{(**self)==(**other)}
+	fn ne(&self,other:&ViewMut<'b,X>)->bool{(**self)!=(**other)}
+}
+impl<   'b,E:PartialEq<X>,X> PartialEq<ViewMut<'b,X>> for View<E>{
+	fn eq(&self,other:&ViewMut<'b,X>)->bool{( *self)==(**other)}
+	fn ne(&self,other:&ViewMut<'b,X>)->bool{( *self)!=(**other)}
+}
+impl<'a   ,E:PartialEq<X>,X> PartialEq<View   <   X>> for ViewRef<'a,E>{
+	fn eq(&self,other:&View   <   X>)->bool{(**self)==( *other)}
+	fn ne(&self,other:&View   <   X>)->bool{(**self)!=( *other)}
+}
+impl<'a   ,E:PartialEq<X>,X> PartialEq<View   <   X>> for ViewMut<'a,E>{
+	fn eq(&self,other:&View   <   X>)->bool{(**self)==( *other)}
+	fn ne(&self,other:&View   <   X>)->bool{(**self)!=( *other)}
+}
+impl<      E:PartialEq<X>,X> PartialEq<View  <    X>> for View<E>{
+	fn eq(&self,other:&View   <   X>)->bool{
+		if self.validate().is_ok(){
+			self.dims()==other.dims()&&self.positions().all(|px|self[&px]==other[&px])
+		}else{
+			let (inner,other)=(&self.0[0],&other.0[0]);
+			assert!(inner.buffer_cap()>0&&other.buffer_cap()>0);	// TODO this *should* be the case, but I have a feeling we need a slightly stronger unsafe condition somewhere to eliminate this assertion
+
+			inner.layout()==other.layout()&&inner.buffer()==other.buffer()
+		}
 	}
-}
-impl<E:PartialEq<X>,X> PartialEq<Tensor<X>> for Tensor<E>{
-	fn eq(&self,other:&Tensor<X>)->bool{self.dims()==other.dims()&&self.positions().all(|ix|self[&ix]==other[&ix])}
-	fn ne(&self,other:&Tensor<X>)->bool{self.dims()!=other.dims()||self.positions().any(|ix|self[&ix]!=other[&ix])}
-}
-impl<E:PartialEq<X>,X> PartialEq<View<X>> for Tensor<E>{
-	fn eq(&self,other:&View  <X>)->bool{self.dims()==other.dims()&&self.positions().all(|ix|self[&ix]==other[&ix])}
-	fn ne(&self,other:&View  <X>)->bool{self.dims()!=other.dims()||self.positions().any(|ix|self[&ix]!=other[&ix])}
-}
-impl<E:PartialEq<X>,X> PartialEq<Tensor<X>> for View<E>{
-	fn eq(&self,other:&Tensor<X>)->bool{self.dims()==other.dims()&&self.positions().all(|ix|self[&ix]==other[&ix])}
-	fn ne(&self,other:&Tensor<X>)->bool{self.dims()!=other.dims()||self.positions().any(|ix|self[&ix]!=other[&ix])}
-}
-impl<E:PartialEq<X>,X> PartialEq<View<X>> for View<E>{
-	fn eq(&self,other:&View  <X>)->bool{self.dims()==other.dims()&&self.positions().all(|ix|self[&ix]==other[&ix])}
-	fn ne(&self,other:&View  <X>)->bool{self.dims()!=other.dims()||self.positions().any(|ix|self[&ix]!=other[&ix])}
+	fn ne(&self,other:&View   <   X>)->bool{
+		if self.validate().is_ok(){
+			self.dims()!=other.dims()||self.positions().any(|px|self[&px]!=other[&px])
+		}else{
+			let (inner,other)=(&self.0[0],&other.0[0]);
+			assert!(inner.buffer_cap()>0&&other.buffer_cap()>0);	// TODO this *should* be the case, but I have a feeling we need a slightly stronger unsafe condition somewhere to eliminate this assertion
+
+			inner.layout()!=other.layout()||inner.buffer()!=other.buffer()
+		}
+	}
 }
 impl<E:Clone> ToOwned for View<E>{
-	fn to_owned(&self)->Tensor<E>{
-		let buffer=self.data().to_vec();
-		let layout=self.layout. clone();
-
-		Tensor::from_inner(buffer,layout)
-	}
-	type Owned=Tensor<E>;
+	fn to_owned(&self)->Tens<E>{self.to_tens()}
+	type Owned=Tens<E>;
 }
 
-impl<E> Tensor<E>{
-	/// reference as a View. the resulting View does not have a validity guarantee; it is as valid as the Tensor it was referenced from
-	pub fn as_mut_view(&mut self)->&mut View<E>{&mut self.0}
-	/// reference as a View. the resulting View does not have a validity guarantee; it is as valid as the Tensor it was referenced from
-	pub fn as_view(&self)->&View<E>{&self.0}
-	/// reference the dims. no particular validity guarantee is present for unsafe purposes, but most nontrival functionality still expects a Tensor's layout to be mutably valid for its buffer
-	pub fn dims_mut(&mut self)->&mut [usize]{
-		unsafe{			// this can be made safe because Tensor does not have a validity guarantee
-			self.0.dims_mut()
-		}
+impl<'a,E> ViewRef<'a,E>{
+	#[track_caller]
+	/// broadcast a specific axis. panics if the dims would be incompatible, or if dims and strides have mismatched lengths. panics if the index is out of bounds
+	pub fn broadcast_dim(&self,index:impl SignedIndexPosition,rhs:usize)->ViewRef<'a,E>{
+		let mut view=self.clone();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().broadcast_dim(index,rhs);
+		view
 	}
-	/// create a new tensor from the inner data without checking. Most nontrival functionality still expects a Tensor's layout to be mutably valid for its buffer. violating this may result in panics or unexpected behavior
-	pub fn from_inner(buffer:Vec<E>,layout:Layout)->Self{
-		unsafe{		// Tensor wrapper does not have a validity guarantee, so it's safe to not check
-			Self(View::from_inner_unchecked(buffer,layout))
+	#[track_caller]
+	/// broadcast the dims, panicing if the dims are not broadcast compatible with rhs
+	pub fn broadcast<D:AsRef<[usize]>>(&mut self,rhs:D)->ViewRef<'a,E>{
+		let mut view=self.clone();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().broadcast(rhs);
+		view
+	}
+	/// create an empty view of a particular rank. panics if rank is 0
+	pub fn empty(rank:usize)->Self{
+		assert!(rank!=0);
+		unsafe{		// safety: trivial
+			let (buffer,layout)=Tens::empty(rank).into_inner();
+			let ptr=buffer.as_ptr();
+			let len=0;
+
+			from_raw_parts(layout,ptr,len)
 		}
 	}
 	#[track_caller]
-	/// convert into a view, panicing if invalid
-	pub fn into_view(self)->View<E>{
-		match self.try_into_view(){
-			Err(e)=>panic!("{e}"),
-			Ok(x)=>x
+	/// reverse the order of components along all axes except the one at the index. panics if the index is out of bounds
+	pub fn flip_around(&self,index:impl SignedIndexPosition)->ViewRef<'a,E>{
+		let mut view=self.clone();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().flip_around(index);
+		view
+	}
+	#[track_caller]
+	/// reverse the order of components along the axis. panics if the index is out of bounds
+	pub fn flip_dim(&self,index:impl SignedIndexPosition)->ViewRef<'a,E>{
+		let mut view=self.clone();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().flip_dim(index);
+		view
+	}
+	/// reverse the order of components along all axes
+	pub fn flip(&self)->ViewRef<'a,E>{
+		let mut view=self.clone();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().flip();
+		view
+	}
+	#[track_caller]
+	/// swap a pair of axes. unspecified result if the layout is invalid for the buffer
+	pub fn swap_dims(&self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->ViewRef<'a,E>{
+		let mut view=self.clone();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().swap_dims(a,b);
+		view
+	}
+	/// convert to an owned tensor
+	pub fn to_tensor(&self)->Tensor<E> where E:Clone{self.view_ref().into()}
+	/// reference as a ViewRef
+	pub fn view_ref(&self)->ViewRef<'_,E>{
+		unsafe{		// preconditions already checked on construction we're just shortening the lifetime
+			from_raw_parts(self.get_layout(),self.as_ptr(),self.get_len())
+		}
+	}
+}
+impl<'a,E> ViewMut<'a,E>{
+	#[track_caller]
+	/// broadcast a specific axis. panics if the dims would be incompatible, or if dims and strides have mismatched lengths. panics if the index is out of bounds
+	pub fn broadcast_dim(self,index:impl SignedIndexPosition,rhs:usize)->ViewRef<'a,E>{
+		let mut view=self.into_view_ref();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().broadcast_dim(index,rhs);
+		view
+	}
+	#[track_caller]
+	/// broadcast the dims, panicing if the dims are not broadcast compatible with rhs
+	pub fn broadcast<D:AsRef<[usize]>>(self,rhs:D)->ViewRef<'a,E>{
+		let mut view=self.into_view_ref();
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().broadcast(rhs);
+		view
+	}
+	/// create an empty view of a particular rank. panics if rank is 0
+	pub fn empty(rank:usize)->Self{
+		assert!(rank!=0);
+		unsafe{		// safety: trivial
+			let (mut buffer,layout)=Tens::empty(rank).into_inner();
+			let ptr=buffer.as_mut_ptr();
+			let len=0;
+
+			from_raw_parts_mut(layout,ptr,len)
 		}
 	}
 	#[track_caller]
-	/// create a new tensor. panics if the layout is invalid
-	pub fn new(buffer:Vec<E>,dims:impl AsRef<[usize]>)->Self{Self(View::new(buffer,dims))}
-	/// reference the strides. no particular validity guarantee is present for unsafe purposes, but most nontrival functionality still expects a Tensor's layout to be mutably valid for its buffer
-	pub fn strides_mut(&mut self)->&mut [isize]{
-		unsafe{			// this can be made safe because Tensor does not have a validity guarantee
-			self.0.strides_mut()
+	/// reverse the order of components along all axes except the one at the index. panics if the index is out of bounds
+	pub fn flip_around(self,index:impl SignedIndexPosition)->ViewMut<'a,E>{
+		let mut view=self;
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().flip_around(index);
+		view
+	}
+	#[track_caller]
+	/// reverse the order of components along the axis. panics if the index is out of bounds
+	pub fn flip_dim(self,index:impl SignedIndexPosition)->ViewMut<'a,E>{
+		let mut view=self;
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().flip_dim(index);
+		view
+	}
+	/// reverse the order of components along all axes
+	pub fn flip(self)->ViewMut<'a,E>{
+		let mut view=self;
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().flip();
+		view
+	}
+	/// convert into a shared view
+	pub fn into_view_ref(self)->ViewRef<'a,E>{
+		unsafe{		// safety: the from raw parts condition for view ref is weaker
+			from_raw_parts(self.get_layout(),self.as_ptr(),self.get_len())
 		}
 	}
-	/// convert into a View, erroring if invalid
-	pub fn try_into_view(self)->Result<View<E>>{
-		self.0.layout.validate_mut(self.0.data().len()).map_err(|e|e.with_op("view"))?;
-		Ok(self.0)
+	#[track_caller]
+	/// swap a pair of axes. unspecified result if the layout is invalid for the buffer
+	pub fn swap_dims(self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->ViewMut<'a,E>{
+		let mut view=self;
+									// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid
+		view.0.layout_mut().swap_dims(a,b);
+		view
 	}
-	/// check validity of the view for a shared context
-	pub fn validate(&self)->Result<()>{self.layout.validate(self.data().len())}
-	/// reference as a View. the resulting View does not have a validity guarantee; it is as valid as the Tensor it was referenced from
-	pub fn view(&self)->&View<E>{&self.0}
+	/// convert to an owned tensor
+	pub fn to_tensor(&self)->Tensor<E> where E:Clone{self.view_ref().into()}
+	/// reference as a ViewRef
+	pub fn view_ref(&self)->ViewRef<'_,E>{
+		unsafe{		// preconditions already checked on construction we're just shortening the lifetime
+			from_raw_parts(self.get_layout(),self.as_ptr(),self.get_len())
+		}
+	}
+	/// reference as a ViewMut
+	pub fn view_mut(&mut self)->ViewMut<'_,E>{
+		unsafe{		// preconditions already checked on construction we're just shortening the lifetime
+			from_raw_parts_mut(self.get_layout(),self.as_mut_ptr(),self.get_len())
+		}
+	}
 }
 impl<E> View<E>{
-	/// get as a ptr
-	pub fn as_ptr(&self)->*const E{self.ptr}
-	/// get as a ptr
-	pub fn as_mut_ptr(&mut self)->*mut E{self.ptr}
-	/// reference as a View. inherit validity guarantees from wrapping
-	pub fn as_mut_view(&mut self)->&mut View<E>{self}
-	/// reference as a View. inherit validity guarantees from wrapping
+	/// get the pointer to the buffer. Depending on where the View came from, this may be the pointer to a sub-buffer of the actual allocated buffer
+	pub fn as_mut_ptr(&mut self)->*mut E{self.0[0].as_mut_ptr()}
+	/// get the pointer to the buffer. Depending on where the View came from, this may be the pointer to a sub-buffer of the actual allocated buffer
+	pub fn as_ptr(&self)->*const E{self.0[0].as_ptr()}
+	/// reference as a View
 	pub fn as_view(&self)->&View<E>{self}
-	/// count the number of components
-	pub fn count(&self)->usize{self.layout.count()}
-	/// reference the data
-	pub fn data(&self)->&[E]{
-		let (ptr,len)=(self.ptr,self.len);
-		unsafe{			// for safety we maintain a valid slice of data
-			slice::from_raw_parts(ptr,len)
+	/// reference as a View
+	pub fn as_mut_view(&mut self)->&mut View<E>{self}
+	#[track_caller]
+	/// broadcast a specific axis. panics if the dims would be incompatible, or if dims and strides have mismatched lengths. panics if the index is out of bounds
+	pub fn broadcast_dim(&self,index:impl SignedIndexPosition,rhs:usize)->ViewRef<'_,E>{self.view_ref().broadcast_dim(index,rhs)}
+	#[track_caller]
+	/// broadcasting the dims, panics if the layout is invalid, or if the dims would be incompatible.
+	pub fn broadcast<D:AsRef<[usize]>>(&self,rhs:D)->ViewRef<'_,E>{self.view_ref().broadcast(rhs)}
+	/// reference a component of the tensor. This checks bounds, but does not explicitly check layout validity. It will however return an invalid layout error if the position passes the bounds check but still fails to produce an offset in bounds of the buffer
+	pub fn component<P:SignedIndexPosition>(&self,position:&[P])->Result<&E>{
+		let (dims,strides)=(self.dims(),self.strides());
+		error::check_bounds(dims,position).map_err(|e|e.with_op("index"))?;
+
+		unsafe{		// safety: "valid layouts (in general not just for buffer) stored by the resulting Tens must never produce an offset less than len for which ptr+offset not valid for conversion to a shared reference" - Tens precondition. "If cap>0, (ptr, len, cap) must be ok to convert to Vec." - Tens precondition. View with cap==0 are created in from_raw_parts, from_raw_parts_mut, or empty, which require valid layouts, and any offset of ptr reachable through a position in bounds of the layout must be simultaneously valid as a shared reference. View with cap>0 are created from Tens with cap>0 condition, which implies anywhere in the buffer can be shared referenced.
+			let offset=position::compute_offset(dims,position,strides);
+			let ptr=self.as_ptr();
+
+			if offset>self.get_len(){return Err(Error::invalid_layout(self.get_layout(),"index"))}
+			Ok(&    *ptr.add(offset))
 		}
 	}
-	/// reference the data
-	pub fn data_mut(&mut self)->&mut [E]{
-		let (ptr,len)=(self.ptr,self.len);
-		unsafe{			// for safety we maintain a valid slice of data
-			slice::from_raw_parts_mut(ptr,len)
+	/// reference a component of the tensor. This checks bounds, but does not explicitly check layout validity. It will however return an invalid layout error if the position passes the bounds check but still fails to produce an offset in bounds of the buffer
+	pub fn component_mut<P:SignedIndexPosition>(&mut self,position:&[P])->Result<&mut E>{
+		let (dims,strides)=(self.dims(),self.strides());
+		error::check_bounds(dims,position).map_err(|e|e.with_op("index"))?;
+
+		unsafe{		// safety: "valid layouts (in general not just for buffer) stored by the resulting Tens must never produce an offset less than len for which ptr+offset not valid for conversion to a shared reference, and if the buffer will be mutated, temporary conversion to a mutable reference" - Tens precondition. "If cap>0, (ptr, len, cap) must be ok to convert to Vec." - Tens precondition. View with cap==0 are created in from_raw_parts, from_raw_parts_mut, or empty. from_raw_parts_mut requires valid layouts, and any offset of ptr reachable through a position in bounds of the layout must be simultaneously valid as a mutable reference, and from_raw_parts returns a ViewRef which only allows shared View references. View with cap>0 are created from Tens with cap>0 condition, which implies anywhere in the buffer can be mutable referenced.
+			let offset=position::compute_offset(dims,position,strides);
+			let ptr=self.as_mut_ptr();
+
+			if offset>self.get_len(){return Err(Error::invalid_layout(self.get_layout(),"index"))}
+			Ok(&mut *ptr.add(offset))
 		}
 	}
+	/// count the number of components. assumes layout validity and may overflow if invalid
+	pub fn count(&self)->usize{self.0[0].layout().count()}
 	/// reference the dims
-	pub fn dims(&self)->&[usize]{self.layout.dims()}
-	/// reference the dims. the caller must maintain any applicable validity guarantees of the View Layout
-	pub unsafe fn dims_mut(&mut self)->&mut [usize]{self.layout.dims_mut()}
-	/// create a new View from a buffer and layout. the caller must uphold any applicable validity guarantees.
-	pub unsafe fn from_inner_unchecked(mut buffer:Vec<E>,layout:Layout)->Self{
-		let ptr=buffer.as_mut_ptr();
-		let len=buffer.len();
-		let cap=buffer.capacity();
+	pub fn dims(&self)->&[usize]{self.0[0].layout().dims()}
+	/// flatten into a vec. panics if the layout is invalid for the buffer
+	pub fn flat_vec(&self,mem:impl Into<Option<Vec<E>>>)->Vec<E> where E:Clone{
+		let mut mem=mem.into().unwrap_or_default();
+		mem.reserve(self.count());
 
-		Self{layout,ptr,len,cap}
+		for px in self.positions(){mem.push(self[px].clone())}
+		mem
 	}
+	#[track_caller]
+	/// reverse the order of components along all axes except the one at the index. panics if the index is out of bounds
+	pub fn flip_around(&self,index:impl SignedIndexPosition)->ViewRef<'_,E>{self.view_ref().flip_dim(index)}
+	#[track_caller]
+	/// reverse the order of components along the axis. panics if the index is out of bounds
+	pub fn flip_dim(&self,index:impl SignedIndexPosition)->ViewRef<'_,E>{self.view_ref().flip_dim(index)}
+	/// reverse the order of components along all axes
+	pub fn flip(&self)->ViewRef<'_,E>{self.view_ref().flip()}
 	/// get the layout
-	pub fn get_layout(&self)->Layout{self.layout.clone()}
-	/// reference the layout
-	pub fn layout(&self)->&Layout{&self.layout}
-	/// reference the layout. the caller must maintain any applicable validity guarantees of the View Layout
-	pub unsafe fn layout_mut(&mut self)->&mut Layout{&mut self.layout}
-	/// wrap in a Tensor
-	pub fn into_tensor(self)->Tensor<E>{Tensor(self)}
-	/// get the len of the layout (may be less than the len of the data)
-	pub fn len(&self)->usize{self.layout.len()}
+	pub fn get_layout(&self)->Layout{self.0[0].layout().clone()}
+	/// get the internal buffer length. Depending on where the View came from, this may be the length a sub-buffer of the actual allocated buffer
+	pub fn get_len(&self)->usize{self.0[0].buffer_len()}
+	/// checks if the dims contain 0
+	pub fn is_empty(&self)->bool{self.dims().contains(&0)}
+	/// check if the layout is normalized. also checks that the count is equal to the buffer len
+	pub fn is_layout_normalized(&self)->bool{
+		let layout=self.get_layout();
+		layout.is_normalized()&&layout.count()==self.get_len()
+	}
+	/// check if this layout represents a scalar.
+	pub fn is_scalar(&self)->bool{self.dims().is_empty()}
+	/// count the buffer length. assumes layout validity and may overflow if invalid
+	pub fn len(&self)->usize{self.0[0].layout().len()}
 	#[track_caller]
-	/// create a new View from a buffer and dims, panicing for a mutable view
-	pub fn new(buffer:Vec<E>,dims:impl AsRef<[usize]>)->Self{
-		match Self::try_new(buffer,dims){
-			Err(e)=>panic!("{e}"),
-			Ok(x)=>x
-		}
-	}
-	/// iterate over positions in a tensor
-	pub fn positions(&self)->PositionIter{PositionIter::new(self.dims())}
-	/// set the layout. will panic if invalid for a mutable view of the buffer
-	pub fn set_layout(&mut self,layout:Layout){
-		match layout.validate_mut(self.data().len()){
-			Err(e)=>panic!("{e}"),
-			Ok(_)=>self.layout=layout
-		}
-	}
-	/// reference the strides
-	pub fn strides(&self)->&[isize]{self.layout.strides()}
-	/// reference the strides. the caller must maintain any applicable validity guarantees of the View Layout
-	pub unsafe fn strides_mut(&mut self)->&mut [isize]{self.layout.strides_mut()}
-	/// create a new View from a buffer and layout, erroring if invalid for a mutable view
-	pub fn try_from_inner(buffer:Vec<E>,layout:Layout)->Result<Self>{
-		layout.validate_mut(buffer.len())?;
-		unsafe{		// the layout is safe because it has the strongest validity condition
-			Ok(Self::from_inner_unchecked(buffer,layout))
-		}
-	}
-	/// create a new View from a buffer and dims, erroring if invalid for a mutable view
-	pub fn try_new(buffer:Vec<E>,dims:impl AsRef<[usize]>)->Result<Self>{
-		let buffer=buffer.into();
-		let layout=Layout::try_new(dims)?;
+	/// apply a function to every component, returning a new tensor. panics if the layout is invalid for the buffer
+	pub fn map<F:FnMut(&E)->Y,Y>(&self,mut f:F)->Tens<Y>{
+		let buffer=if self.is_layout_normalized(){
+			unsafe{		// safety: if a normalized layout with count==len meets this type's invariants, ptr must be valid for references up to ptr+len
+				let ptr=self.as_ptr();
+				let len=self.get_len();
+						// with the layout normalized, this has predictable iteration order
+				slice::from_raw_parts(ptr,len).iter().map(f).collect()
+			}
+		}else{
+			error::unwrap_or_panic(self.validate());
 
-		Self::try_from_inner(buffer,layout).map_err(|e|e.with_op("new"))
+			let mut b=Vec::with_capacity(self.count());
+			for px in self.positions(){b.push(f(&self[px]))}
+
+			b
+		};				// the result will have normalized layout
+		let layout=Layout::new(self.dims());
+
+		Tens::from_inner(buffer,layout)
 	}
+	/// iterate over the positions in the tensor
+	pub fn positions(&self)->PositionIter{PositionIter::new(self.dims())}
+	/// return the tensor rank. unspecified result if dims and strides have different ranks
+	pub fn rank(&self)->usize{self.0[0].layout().rank()}
+	/// reference the dims
+	pub fn strides(&self)->&[isize]{self.0[0].layout().strides()}
 	#[track_caller]
-	/// swap dims
-	pub fn swap_dims(mut self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->Self{
-		unsafe{			// swap_dims shouldn't affect layout validity
-			self.layout_mut().swap_dims(a,b);
-			self
+	/// swap a pair of axes. unspecified result if the layout is invalid for the buffer
+	pub fn swap_dims(&self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->ViewRef<'_,E>{self.view_ref().swap_dims(a,b)}
+	/// convert to an owned tensor
+	pub fn to_tens(&self)->Tens  <E> where E:Clone{
+		if self.0[0].buffer_cap()>0{
+			unsafe{		// safety: "If cap>0, (ptr, len, cap) must be ok to convert to Vec" - precondition on Tens construction. If this is the case, (ptr, len) should be fine as a slice
+				let ptr=self.as_ptr();
+				let len=self.get_len();
+												// if this is an owned tensor, reproduce its layout exactly
+				let data=slice::from_raw_parts(ptr,len);
+				let layout=self.0[0].layout().clone();
+				let buffer=data.to_vec();
+
+				Tens::from_inner(buffer,layout)
+			}
+		}else{
+			let buffer=self.flat_vec(None);
+			let layout=Layout::new(self.dims());
+												// if this is a view of a borrowed tensor, we can expect validity but can't reproduce the exact buffer configuration. This should be fine since we consider valid tensors equal if they have the same components at the same positions
+			Tens::from_inner(buffer,layout)
 		}
 	}
-	/// check validity of the view for a shared context
-	pub fn validate_shared(&self)->Result<()>{self.layout.validate(self.data().len())}
-	/// check validity of the view for a mutable context
-	pub fn validate_mut(&self)->Result<()>{self.layout.validate_mut(self.data().len())}
-	/// set the layout. will panic if invalid for a mutable view of the buffer
-	pub fn with_layout(mut self,layout:Layout)->Self{
-		self.set_layout(layout);
-		self
+	/// reference as a ViewRef. Err if the layout is invalid for the buffer
+	pub fn try_view_mut(&mut self)->Result<ViewMut<'_,E>>{
+		unsafe{		// safety: ptr validity is ensured by construction of self. layout validity is ensured by the check
+			let (layout,len)=(self.get_layout(),self.get_len());
+			let ptr=self.as_mut_ptr();
+
+			layout.validate_mut(len).map_err(|e|e.with_op("view"))?;
+			Ok(from_raw_parts_mut(layout,ptr,len))
+		}
+	}
+	/// reference as a ViewRef. Err if the layout is invalid for the buffer
+	pub fn try_view_ref(&self)->Result<ViewRef<'_,E>>{
+		unsafe{		// safety: ptr validity is ensured by construction of self. layout validity is ensured by the check
+			let (layout,len)=(self.get_layout(),self.get_len());
+			let ptr=self.as_ptr();
+
+			layout.validate(len).map_err(|e|e.with_op("view"))?;
+			Ok(from_raw_parts(layout,ptr,len))
+		}
+	}
+	/// check validity of the layout for the buffer len
+	pub fn validate(&self)->Result<()>{self.get_layout().validate(self.get_len())}
+	/// check validity of the layout for the buffer len
+	pub fn validate_mut(&self)->Result<()>{self.get_layout().validate_mut(self.get_len())}
+	#[track_caller]
+	/// reference as a ViewRef. panic if the layout is invalid for the buffer
+	pub fn view_ref(&self)->ViewRef<'_,E>{error::unwrap_or_panic(self.try_view_ref())}
+	#[track_caller]
+	/// reference as a ViewRef. panic if the layout is invalid for the buffer
+	pub fn view_mut(&mut self)->ViewMut<'_,E>{error::unwrap_or_panic(self.try_view_mut())}
+	/// reference as a View
+	pub fn view(&self)->&View<E>{self.as_view()}
+}
+
+/// create a view reference from raw parts. The layout must be valid for len, and any offset of ptr reachable through a position in bounds of the layout must be simultaneously valid as a shared reference for lifetime 'a.
+pub unsafe fn from_raw_parts<'a,E:'a>(layout:Layout,ptr:*const E,len:usize)->ViewRef<'a,E>{
+	unsafe{		// safety: ViewRef meets the borrowed buffer contition. cap==0, so we don't need ptr and len to form a vec. The outer layout validity condition implies the inner one.
+		ViewRef(Tens::_from_raw_parts(layout,ptr as *mut E,len,0),PhantomData)
+	}
+}
+/// create a view reference from raw parts. The layout must be valid for len, and any offset of ptr reachable through a position in bounds of the layout must be simultaneously valid as a mutable reference for lifetime 'a.
+pub unsafe fn from_raw_parts_mut<'a,E:'a>(layout:Layout,ptr:*mut E,len:usize)->ViewMut<'a,E>{
+	unsafe{		// safety: ViewRef meets the borrowed buffer contition. cap==0, so we don't need ptr and len to form a vec. The outer layout validity condition implies the inner one.
+		ViewMut(Tens::_from_raw_parts(layout,ptr,len,0),PhantomData)
 	}
 }
 
 #[repr(transparent)]
-/// owned tensor view. layout validity is not guaranteed, but maining appropriate layout validity is recommended. Failing to do so may result in panics or unexpected behavior. Tensor generally has in-place operations. use View for chain-moved operations and ViewRef/ViewMut for by-ref operations
-pub struct Tensor<E>(View<E>);
-/// tensor view that may have a validity guarantee from its wrapper. Where Tensor generally has in-place operations, View generally has chain-moved operations
-/// validity guarantees:
-/// Tensor wrapper does not guarantee validity
-/// ViewRef wrapper guarantees shared validity
-/// ViewMut wrapper guarantees mutable validity
-/// An owned View created by safe code guarantees mutable validity
-/// Due to the presence validity guarantees in some cases but not others, View<E> cannot implement Clone. use ToOwned instead or use Tensor for a clonable owned tensor, or ViewRef for a cheaply clonable reference type
-pub struct View<E>{	// do not make View Clone because that would allow safe creation of not mutably valid View from ViewRef deref. use ToOwned instead
-	layout:Layout,	// layout info, possibly modified
-	ptr:*mut E,		// buffer pointer. ptr and len must always form a valid slice that makes the layout valid where layout validity is guaranteed
-	len:usize,		// buffer length
-	cap:usize,		// buffer capacity. 0 if not owned (when this is used as a ViewRef field)
-}
+/// a shared tensor view
+pub struct ViewRef<'a,E:'a>(Tens<E>,PhantomData<&'a E>);
+#[repr(transparent)]
+/// a mutable tensor view
+pub struct ViewMut<'a,E:'a>(Tens<E>,PhantomData<&'a E>);
+#[repr(transparent)]
+/// A dynamically-sized view into a multidimensional sequence
+pub struct View<E>([Tens<E>]);// Do not make Sized. Although it looks like this could be Sized as all usages of it currently have the same dynamic size, implementing Sized for this would be unsound. See mem::swap. It would be nicer to make this less fake by making it a slice of MaybeUninit<E> with layout fields at the beginning, but after experimenting with that I've found it has questionable soundess implications for mutable view splitting. Maybe I'll think of a better way next time I refactor this library
 
 use std::{
-	borrow::{Borrow,BorrowMut,ToOwned},cmp::{Eq,PartialEq},error::Error as StdError,hash::{Hash,Hasher},iter::FromIterator,marker::PhantomData,mem,ops::{Deref,DerefMut,Index,IndexMut,Range},ptr,slice,result::Result as StdResult
+	borrow::{Borrow,BorrowMut,ToOwned},cmp::{Eq,PartialEq},fmt::{Debug,Formatter,Result as FmtResult},hash::{Hash,Hasher},marker::PhantomData,ops::{Deref,DerefMut,Index,IndexMut,Range},slice
 };
-use super::{Error,Layout,PositionIter,Position,Result,position::SignedIndexPosition};
+use super::{
+	Error,Layout,PositionIter,Position,Result,Tens,error,position::{SignedIndexPosition,self},tensor::Tensor
+};

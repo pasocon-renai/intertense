@@ -23,6 +23,9 @@ impl Layout{
 
 		self
 	}
+	#[track_caller]
+	/// try broadcasting the dims, panicingif the dims are not broadcast compatible with rhs. does not explicitly validate either layout. the result for invalid layouts with broadcast compatible dims is unspecified
+	pub fn broadcast<D:AsRef<[usize]>>(&mut self,rhs:D)->&mut Self{error::unwrap_or_panic(self.try_broadcast(rhs))}
 	/// computes the offset of a component given its coordinates
 	pub fn compute_offset<I:SignedIndexPosition>(&self,position:&[I])->usize{position::compute_offset(self.dims(),position,self.strides())}
 	/// counts the number of components. invalid layouts may return something unhelpful or unexpected
@@ -290,6 +293,7 @@ impl Layout{
 	}
 	/// checks if a layout has a valid combination of dims and strides
 	/// this function verifies:
+	/// dims and strides have matching ranks
 	/// count does not overflow usize
 	/// dims do not overflow isize
 	/// the required buffer len does not overflow isize
@@ -303,6 +307,7 @@ impl Layout{
 	}
 	/// check if a layout has a valid combination of dims and strides and won't alias its components. Rather than enumerating tensor positions, it checks axis's strides and detects overlap using the least common multiple of stride magnitudes.
 	/// this function verifies:
+	/// dims and strides have matching ranks
 	/// count does not overflow usize
 	/// dims do not overflow isize
 	/// the required buffer len does not overflow isize
@@ -346,6 +351,7 @@ mod serial{
 }
 
 #[derive(Clone,Debug,Default,Eq,Hash,PartialEq)]
+#[repr(transparent)]
 /// dimensions and strides for how a tensor data is layed out in memory
 pub struct Layout{inner:Arc<(Vec<usize>,Vec<isize>)>}
 

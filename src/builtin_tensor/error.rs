@@ -83,6 +83,10 @@ impl Error{
 	pub fn invalid_index(layout:Layout,index:isize,op:&'static str)->Self{
 		Self::new(layout,ErrorKind::InvalidIndex(index),op,None)
 	}
+	/// create an invalid layout error
+	pub fn invalid_layout(layout:Layout,op:&'static str)->Self{
+		Self::new(layout,ErrorKind::InvalidLayout,op,None)
+	}
 	/// create a len overflow error
 	pub fn len_overflow(layout:Layout,op:&'static str)->Self{
 		Self::new(layout,ErrorKind::LenOverflow,op,None)
@@ -335,6 +339,7 @@ pub fn check_dims(dims:&[usize])->Result<()>{
 }
 /// checks if a layout has a valid combination of dims and strides
 /// this function verifies:
+/// dims and strides have matching ranks
 /// count does not overflow usize
 /// dims do not overflow isize
 /// the required buffer len does not overflow isize
@@ -347,6 +352,7 @@ pub fn check_layout(dims:&[usize],strides:&[isize])->Result<()>{
 }
 /// check if a layout has a valid combination of dims and strides and won't alias its components. Rather than enumerating tensor positions, it checks axis's strides and detects overlap using the least common multiple of stride magnitudes.
 /// this function verifies:
+/// dims and strides have matching ranks
 /// count does not overflow usize
 /// dims do not overflow isize
 /// the required buffer len does not overflow isize
@@ -438,6 +444,13 @@ pub fn check_shape_match(adims:&[usize],bdims:&[usize])->Result<()>{
 pub fn diagnostic_layout(dims:&[usize],strides:&[isize])->Layout{Layout::from_inner(dims.to_vec(),strides.to_vec())}
 /// create a layout that lacks strides for diagnostic purposes specifically relating to dimensions
 pub fn diagnostic_shape(dims:&[usize])->Layout{Layout::from_inner(dims.to_vec(),Vec::new())}
+/// unwrap or panic with the error display rather than the usual unwrap panic
+pub fn unwrap_or_panic<T,E:Display>(result:StdResult<T,E>)->T{
+	match result{
+		Err(e)=>panic!("{e}"),
+		Ok(x)=>x
+	}
+}
 
 use std::{
 	cmp::PartialEq,error::Error as StdError,fmt::{Display,Formatter,Result as FmtResult},iter,result::Result as StdResult,sync::Arc
