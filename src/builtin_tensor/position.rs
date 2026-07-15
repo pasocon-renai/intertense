@@ -1,20 +1,20 @@
 impl AsMut<[isize]> for Position{
-	fn as_mut(&mut self)->&mut [isize]{Arc::make_mut(&mut self.0)}
+	fn as_mut(&mut self)->&mut [isize]{self.as_mut_slice()}
 }
 impl AsMut<Position> for Position{
 	fn as_mut(&mut self)->&mut Position{self}
 }
 impl AsRef<[isize]> for Position{
-	fn as_ref(&self)->&[isize]{self.0.as_ref()}
+	fn as_ref(&self)->&[isize]{self.as_slice()}
 }
 impl AsRef<Position> for Position{
 	fn as_ref(&self)->&Position{self}
 }
 impl Borrow<[isize]> for Position{
-	fn borrow(&self)->&[isize]{&*self}
+	fn borrow(&self)->&[isize]{self.as_slice()}
 }
 impl BorrowMut<[isize]> for Position{
-	fn borrow_mut(&mut self)->&mut [isize]{&mut *self}
+	fn borrow_mut(&mut self)->&mut [isize]{self.as_mut_slice()}
 }
 impl Clone for Position{
 	fn clone(&self)->Self{Self(self.0.clone())}
@@ -24,11 +24,11 @@ impl Clone for Position{
 	}
 }
 impl Deref for Position{
-	fn deref(&self)->&Self::Target{self.as_ref()}
+	fn deref(&self)->&Self::Target{self.as_slice()}
 	type Target=[isize];
 }
 impl DerefMut for Position{
-	fn deref_mut(&mut self)->&mut Self::Target{self.as_mut()}
+	fn deref_mut(&mut self)->&mut Self::Target{self.as_mut_slice()}
 }
 impl Display for Position{
 	fn fmt(&self,f:&mut Formatter<'_>)->FmtResult{
@@ -51,47 +51,46 @@ impl DoubleEndedIterator for PositionIter{
 	fn next_back(&mut self)->Option<Self::Item>{
 		let dims=self.layout.dims();
 		let rank=dims.len();
-
+										// if the iteration has started, decrement the back position. Otherwise, start from the last position. (unless dims contains 0 because empty tensors produce no positions)
 		if let Some(back)=self.back.as_deref_mut(){
 			if decrement_position(dims,back)>0{
+										// if it wraps the iteration is done and it's reached the end. undo the decrement to make it not restart after the None.
 				increment_position(dims,back);
-				return None
+				return None;
 			}
 		}else if !dims.contains(&0){
 			self.back=Some(Position::end(rank));
-		}
-		if let Some(front)=self.front.as_deref()&&let Some(back)=self.back.as_deref_mut(){
+		}								// if both forward and reverse iteration have started, ensure we don't yield the same position from both ends
+		if let Some(back)=self.back.as_deref_mut()&&let Some(front)=self.front.as_deref(){
 			if greater_equals_position(dims,front,back){
+										// if the iteration is done undo the decrement to make it not restart after the None
 				increment_position(dims,back);
 				return None
 			}
 		}
+
 		self.back.clone()
 	}
 	fn nth_back(&mut self,n:usize)->Option<Self::Item>{
 		let dims=self.layout.dims();
 		let rank=dims.len();
-												// if n is 0 return next, the len calculation that takes about as long as next's worst case
+									// if n is 0 return next_back early to skip the len calculation that takes as long as next_back's worst case
 		if n==0{return self.next_back()}
-		let max=if let Some(m)=self.len().checked_sub(1){m}else{return None};
-												// halt if n>=self.len()-1. This simplifies check for done and also implicitly handles the edge case where n==usize::MAX, which would otherwise overflow n+1 later. Empty shape case is handled previously
-		if n>=max{
-			let item=if n==max{self.back.clone()}else{None};
-			self.back.clone_from(&self.front);
-
-			if let Some(back)=self.back.as_deref_mut(){
-				decrement_position(dims,back);
-			}
-			return item
-		}										// the bounds are exclusive. creating a bound counts as a next
+		let len=self.len();
+									// since this iterator fuses, we don't need to go farther than len. in fact, we don't need to go farther than len-1 as we can skip the decrement by using len to know when to end
+		if len==0{return None}
+		let k=n.min(len-1);
+									// basically next_back but rewind by k+1 instead of increment
 		if let Some(back)=self.back.as_deref_mut(){
-			rewind_position(dims,n+1,back);
-		}else{
-			let mut back=Position::new(rank);
-			rewind_position(dims,n,&mut back);
+			rewind_position(dims,k+1,back);
+		}else if !dims.contains(&0){
+			let mut back=Position::end(rank);
+			rewind_position(dims,k,&mut back);
 
-			self.back=Some(back)
+			self.back=Some(back);
 		}
+
+		if n>=len{return None}
 		self.back.clone()
 	}
 }
@@ -100,6 +99,14 @@ impl ExactSizeIterator for PositionIntoIter{
 }
 impl ExactSizeIterator for PositionIter{
 	fn len(&self)->usize{
+		// The remaining length is computed by subtracting the current front position from the current back position using mixed-radix arithmetic.
+		// Since the bounds are exclusive and may be absent before iteration begins, an additional most-significant radix-3 digit is introduced.
+		// The additional radix-3 digit encodes the iterator state:
+		// 0: before the first element (front==None)
+		// 1: within the iteration (Some(position))
+		// 2: after the last element (back==None)
+		// This allows a None front to be encoded as 1 before the first item, and a None back to be encoded as 1 after the last item, so all iterator states may be handled by the same subtraction algorithm.
+		// Because both stored bounds are exclusive to keep the stored positions in their existing allocations, the remaining length is back-front-1 rather than the usual half-open end-start
 		let mut acc=0;
 		let mut borrow=0;
 		let dims=self.dims();
@@ -208,47 +215,46 @@ impl Iterator for PositionIter{
 	fn next(&mut self)->Option<Self::Item>{
 		let dims=self.layout.dims();
 		let rank=dims.len();
-
+										// if the iteration has started, increment the front position. Otherwise, start from the first position. (unless dims contains 0 because empty tensors produce no positions)
 		if let Some(front)=self.front.as_deref_mut(){
 			if increment_position(dims,front)>0{
+										// if it wraps the iteration is done and it's reached the end. undo the increment to make it not restart after the None.
 				decrement_position(dims,front);
 				return None;
 			}
 		}else if !dims.contains(&0){
 			self.front=Some(Position::new(rank));
-		}
+		}								// if both forward and reverse iteration have started, ensure we don't yield the same position from both ends
 		if let Some(front)=self.front.as_deref_mut()&&let Some(back)=self.back.as_deref(){
 			if greater_equals_position(dims,front,back){
+										// if the iteration is done undo the increment to make it not restart after the None
 				decrement_position(dims,front);
 				return None
 			}
 		}
+
 		self.front.clone()
 	}
 	fn nth(&mut self,n:usize)->Option<Self::Item>{
 		let dims=self.layout.dims();
 		let rank=dims.len();
-												// if n is 0 return next, the len calculation that takes about as long as next's worst case
+									// if n is 0 return next early to skip the len calculation that takes as long as next's worst case
 		if n==0{return self.next()}
-		let max=if let Some(m)=self.len().checked_sub(1){m}else{return None};
-												// halt if n>=self.len()-1. This simplifies check for done and also implicitly handles the edge case where n==usize::MAX, which would otherwise overflow n+1 later. Empty shape case is handled previously
-		if n>=max{
-			let item=if n==max{self.front.clone()}else{None};
-			self.front.clone_from(&self.back);
-
-			if let Some(front)=self.front.as_deref_mut(){
-				decrement_position(dims,front);
-			}
-			return item
-		}										// the bounds are exclusive. creating a bound counts as a next
+		let len=self.len();
+									// since this iterator fuses, we don't need to go farther than len. in fact, we don't need to go farther than len-1 as we can skip the decrement by using len to know when to end
+		if len==0{return None}
+		let k=n.min(len-1);
+									// basically next but advance by k+1 instead of increment
 		if let Some(front)=self.front.as_deref_mut(){
-			advance_position(dims,n+1,front);
-		}else{
+			advance_position(dims,k+1,front);
+		}else if !dims.contains(&0){
 			let mut front=Position::new(rank);
-			advance_position(dims,n,&mut front);
+			advance_position(dims,k,&mut front);
 
-			self.front=Some(front)
+			self.front=Some(front);
 		}
+
+		if n>=len{return None}
 		self.front.clone()
 	}
 	fn size_hint(&self)->(usize,Option<usize>){
@@ -259,15 +265,12 @@ impl Iterator for PositionIter{
 }
 impl<P:SignedIndexPosition> PartialEq<(&[P],&[usize])> for Position{
 	fn eq(&self,other:&(&[P],&[usize]))->bool{self.partial_cmp(other)==Some(Ordering::Equal)}
-	fn ne(&self,other:&(&[P],&[usize]))->bool{self.partial_cmp(other)!=Some(Ordering::Equal)}
 }
 impl<P:SignedIndexPosition> PartialEq<(&[P],&Layout)> for Position{
 	fn eq(&self,other:&(&[P],&Layout))->bool{*self==(other.0,&**other.1.dims())}
-	fn ne(&self,other:&(&[P],&Layout))->bool{*self!=(other.0,&**other.1.dims())}
 }
 impl PartialEq for Position{
 	fn eq(&self,other:&Self)->bool{self.partial_cmp(other)==Some(Ordering::Equal)}
-	fn ne(&self,other:&Self)->bool{self.partial_cmp(other)!=Some(Ordering::Equal)}
 }
 impl<P:SignedIndexPosition> PartialOrd<(&[P],&[usize])> for Position{
 	fn partial_cmp(&self,other:&(&[P],&[usize]))->Option<Ordering>{
@@ -297,11 +300,14 @@ impl PartialOrd for Position{
 	fn partial_cmp(&self,other:&Self)->Option<Ordering>{
 		let (px,qx)=(self.as_slice(),other.as_slice());
 		let rank=px.len();
-
+								// If the positions have different ranks, we don't consider them able to can't be compared
 		if qx.len()!=rank{return None}
-
+								// If the positions have opposite signs, we can't compare without knowing the dims
 		for ix in 0..rank{
-			match px[ix].cmp(&qx[ix]){
+			let (px,qx)=(px[ix],qx[ix]);
+			if (px<0)^(qx<0){return None}
+								// compare the position lexiconigraphically
+			match px.cmp(&qx){
 				Ordering::Equal=>continue,
 				o=>return Some(o)
 			}
@@ -334,11 +340,11 @@ impl TryFrom<&[usize]> for PositionIter{
 }
 
 impl PositionIter{
-	/// returns current back position, which is the most recent position from next_back or None if the iteration has ended and returned None from either end. If next_back has not been called, this will either return None or another sentinel value
+	/// returns current back position, which is usually the most recent position from next_back, but may be None or an exclusive bound on the yielded position if next_back has not been called
 	pub fn back(&self)->Option<Position>{self.back.clone()}
 	/// references the dimensions of the tensor whose position this iterates over
 	pub fn dims(&self)->&[usize]{self.layout.dims()}
-	/// returns current front position, which is the most recent position from next or None if the iteration has ended and returned None from either end. If next has not been called, this may return None or another sentinel value
+	/// returns current front position, which is usuallt the most recent position from next, but may be None or an exclusive bound on the yielded position if next_back has not been called
 	pub fn front(&self)->Option<Position>{self.front.clone()}
 	#[track_caller]
 	/// creates a new position iter over the specified dimensions. The iterator will iterate once over every position in bounds of dims, with positive positions from forward iteration and negative positions from reverse iteration. panics if the dims are invalid (if any exceed isize::MAX, or their product overflows a usize)
@@ -373,31 +379,39 @@ impl PositionIter{
 	pub fn rank(&self)->usize{self.layout.rank()}
 }
 impl Position{
-	/// advance position
+	#[track_caller]
+	/// Advances this position by `distance` steps in last-axis-fastest iteration order. Panics if any coordinates at indices reached are out of bounds or if any dims at indices reached exceed isize::MAX, but may not reach all indices. Panics if dims and position have mismatched ranks
+	/// Returns a carry value equal to the number of times the position has to wrap around the tensor before advancing the full distance.
+	/// This return value behaves like the carry from mixed-radix addition, allowing positions over multiple groups of axes to be advanced independently.
 	pub fn advance(&mut self,dims:&[usize],distance:usize)->usize{advance_position(dims,distance,self)}
-	/// references as a slice
+	/// References the coordinates as a mutable slice.
+	/// If the coordinates are shared with other `Position`s, they are cloned so that a unique slice may be returned
+	pub fn as_mut_slice(&mut self)->&mut [isize]{Arc::make_mut(&mut self.0)}
+	/// References the coordinates as a shared slice.
 	pub fn as_slice(&self)->&[isize]{self.0.as_ref()}
-	/// references as an unsigned coordinates. note that this doesn't perform index normalization, it just casts isize to usize
+	/// Reinterprets the shared coordinates as `usize`. This performs a bitwise reinterpretation of each coordinate and does not normalize negative indices. It is recommended that callers ensure all coordinates are positive before calling. For example, `-1` becomes `usize::MAX`, which is unlikely to be what you want.
+	/// This method is primarily intended for low-level code that treats the coordinates as raw integers.
 	pub fn cast_unsigned(&self)->&[usize]{
-		let ix:&[isize]=self.as_ref();
-		unsafe{slice::from_raw_parts(ix.as_ptr() as *const usize,ix.len())}
+		let ix:&[isize]=self.as_slice();
+		unsafe{		// safety: isize and usize have identical size and alignment, and the returned slice has the same lifetime, ptr, and len as the original.
+			slice::from_raw_parts(ix.as_ptr() as *const usize,ix.len())
+		}
 	}
-	/// advance position by -1
+	/// Rewind this position by 1 step in last-axis-fastest iteration order. Equivalent to rewind(dims,1), but optimized for a single step.
 	pub fn decrement(&mut self,dims:&[usize])->usize{decrement_position(dims,self)}
-	/// creates a new position whose coordinates are all -1
+	/// Creates the last position of a tensor with the given rank. The coordinates are all initialized to -1.
+	/// This represents the last component along every axis when interpreted using signed indexing.
 	pub fn end(rank:usize)->Self{Self(vec![-1;rank].into())}
-	/// advance position by 1
+	/// Advance this position by 1 step in last-axis-fastest iteration order. Equivalent to advance(dims,1), but optimized for a single step.
 	pub fn increment(&mut self,dims:&[usize])->usize{increment_position(dims,self)}
-	/// convert the indices to their unsigned forms
-	pub fn into_unsigned(mut self,dims:&[usize])->Self{
-		self.unsign(dims);
-		self
-	}
-	/// creates a new zeroed position
+	/// Creates the first position of a tensor with the given rank. The coordinates are all initialized to 0
 	pub fn new(rank:usize)->Self{Self(vec![0;rank].into())}
-	/// return the rank. more vocab consistent than using self.len() through deref
+	/// /// Returns the rank of this position. position.rank() is consistent with this library's vocabulary than using position.len() through deref
 	pub fn rank(&self)->usize{self.len()}
-	/// rewind position
+	#[track_caller]
+	/// Rewinds this position by `distance` steps in last-axis-fastest iteration order. Panics if any coordinates at indices reached are out of bounds or if any dims at indices reached exceed isize::MAX, but may not reach all indices. Panics if dims and position have mismatched ranks
+	/// Returns a carry value equal to the number of times the position has to wrap around the tensor before rewinding the full distance.
+	/// This return value behaves like the carry from mixed-radix subtraction, allowing positions over multiple groups of axes to be rewound independently.
 	pub fn rewind(&mut self,dims:&[usize],distance:usize)->usize{rewind_position(dims,distance,self)}
 	/// create a position from coordinates. returns none if any of the coordinates can't be converted to isize
 	pub fn try_from_coordinates<P:SignedIndexPosition>(coordinates:&[P])->Option<Self>{
@@ -419,7 +433,7 @@ impl Position{
 
 		Some(Self(Arc::from(position.as_slice())))
 	}
-	/// convert the indices to their unsigned forms
+	/// Convert the indices to their unsigned forms. Returns None if out of bounds, but may still modify some of the coordinates. Check bounds first if coordinates must be unchanged in the out of bounds case
 	pub fn unsign(&mut self,dims:&[usize])->Option<&[usize]>{
 		assert_eq!(dims.len(),self.len());
 
@@ -430,6 +444,26 @@ impl Position{
 
 #[cfg(test)]
 mod tests{
+	#[test]
+	fn advance(){
+		let mut dims=vec![1,1];
+		let mut position:Vec<isize>=vec![0,0];
+
+		assert_eq!(advance_position(&dims,1,&mut position),1);
+		assert_eq!(position,[0,0]);
+
+		dims=vec![1,2];
+
+		assert_eq!(advance_position(&dims,1,&mut position),0);
+		assert_eq!(position,[0,1]);
+		assert_eq!(advance_position(&dims,1,&mut position),1);
+		assert_eq!(position,[0,0]);
+
+		dims=vec![2,4];
+
+		assert_eq!(advance_position(&dims,18,&mut position),2);
+		assert_eq!(position,[0,2]);
+	}
 	#[test]
 	fn position_offset(){
 		let dims=vec![4,6];
@@ -471,6 +505,43 @@ mod tests{
 		assert_eq!(iter.next(),None);
 	}
 	#[test]
+	fn position_iter_nth(){
+		let iter=PositionIter::new([4,1,3,2,9]);
+		for n in 0..12*18+10{
+			let mut a = iter.clone();
+			let mut b = iter.clone();
+
+			dbg!(n);
+			assert_eq!(a.nth(n), {
+				for _ in 0..n {
+					b.next();
+				}
+				b.next()
+			});
+
+			assert_eq!(a.len(),iter.len().saturating_sub(n+1));
+			assert_eq!(b.len(),iter.len().saturating_sub(n+1));
+		}
+	}
+	#[test]
+	fn position_iter_nth_back(){
+		let iter=PositionIter::new([4,1,3,2,9]);
+		for n in 0..12*18+10{
+			let mut a = iter.clone();
+			let mut b = iter.clone();
+
+			assert_eq!(a.nth_back(n), {
+				for _ in 0..n {
+					b.next_back();
+				}
+				b.next_back()
+			});
+
+			assert_eq!(a.len(),iter.len().saturating_sub(n+1));
+			assert_eq!(b.len(),iter.len().saturating_sub(n+1));
+		}
+	}
+	#[test]
 	fn position_iter_scalar(){
 		let mut iter=PositionIter::new([]);
 
@@ -484,31 +555,28 @@ mod tests{
 }
 
 #[track_caller]
-/// advance by distance along the last axis. When the end of an axis is reached, loops around and advances the position along the next left axis. Panics if any coordinates fail to convert to isize or fail to convert back to their original type after updating. Returns a 'carry' value of how much a hypothetical next-left axis beyond what this function can see would have to be advanced to complete the operation. Bounds and dims are not explicitly checked, but it is expected that no dim exceeds isize::MAX, and their product does not overflow a usize, and that the position is in bounds. If those invariants are upheld, assuming numeric conversions for the position type are well-behaved, the signs of position will be preserved. Since count and by extension distance may be any usize, advance and rewind are separated rather than taking a signed distance. This function relies on division so consider using increment/decrement position for distances of +-1.
+/// Advances this position by `distance` steps in last-axis-fastest iteration order. Panics if any coordinates at indices reached are out of bounds or if any dims at indices visited exceed isize::MAX. Panics if dims and position have mismatched ranks. Also panics if coordinates fail to convert between the canonical isize and their stored types.
+/// Returns a carry value equal to the number of times the position has to wrap around the tensor before advancing the full distance.
+/// This return value behaves like the carry from mixed-radix addition, allowing positions over multiple groups of axes to be advanced independently.
 pub fn advance_position<P:SignedIndexPosition>(dims:&[usize],mut distance:usize,position:&mut [P])->usize{
-													// this algorithm is similar to add assignment of a usize to a big endian mixed radix number
+	assert_eq!(dims.len(),position.len());
+													// this algorithm is conceptually similar to mixed-radix addition on the coordinates,
 	for (&dim,coordinate) in dims.iter().rev().zip(position.iter_mut().rev()){
 		if distance==0{break}
-		let (carry,updatedcoordinate);
-													// get adjustment to the current coordinate
+		assert!(dim<=isize::MAX as usize);
+													// get coordinate and check bounds. as dim==0 case is already covered by bounds check, division by 0 problems won't occur later.
+		let mut px=coordinate.expect_isize("coordinates must fit in isize");
+		if !(-(dim as isize)..dim as isize).contains(&px){panic!("coordinate {px} is out of bounds for dim {dim}")};
+													// we know at least distance/dim carries will be needed, but if adding distance%dim to the coordinate wraps around, we'll need one more. Negative coordinates wrap when they reach 0, positive coordinates wrap when they reach dim.
+		let carrybound=if px<0{0}else{dim as isize};
 		let dx=distance%dim;
-		let px=coordinate.expect_isize("coordinates must fit in isize");
-													// split by sign to avoid overflow. Due to isize::MIN having greater magnitude than isize::MAX, match signedness to the case rather than taking any absolute value
-		if px<0{
-			let dx=dx as isize;
-			let qx=dx+px;
 
-			carry=qx>0;
-			updatedcoordinate=qx-if carry{dim}else{0} as isize;
-		}else{
-			let px=px as usize;
-			let qx=dx+px;
-
-			carry=qx>dim;
-			updatedcoordinate=(qx-if carry{dim}else{0}) as isize;
-		}
-													// adjust position and calculate the distance for the next axis
-		*coordinate=updatedcoordinate.expect_coordinate("updated coordinates must fit in their original type");
+		px+=dx as isize;
+													// correct position if it exceeded the carry bound
+		let carry=px>=carrybound;
+		if carry{px-=dim as isize}
+													// set coordinate to the updated value and update distance to be the distance to advance along the next axis
+		*coordinate=px.expect_coordinate("updated coordinates must fit in their original type");
 		distance=carry as usize+distance/dim;
 	}
 	distance
@@ -517,26 +585,6 @@ pub fn advance_position<P:SignedIndexPosition>(dims:&[usize],mut distance:usize,
 pub fn buffer_len(dims:&[usize],strides:&[isize])->usize{
 	if dims.contains(&0){return 0}
 	dims.iter().rev().zip(strides.iter().rev()).fold(1,|acc,(&dim,&stride)|acc+(dim-1)*stride.abs() as usize)
-}
-/// casts an unsigned position to a signed position without changing its bits
-pub fn cast_to_signed(position:&[usize])->&[isize]{
-	let rank=position.len();
-	unsafe{slice::from_raw_parts(position.as_ptr() as *const isize,rank)}
-}
-/// casts an unsigned position to a signed position without changing its bits
-pub fn cast_to_signed_mut(position:&mut [usize])->&mut [isize]{
-	let rank=position.len();
-	unsafe{slice::from_raw_parts_mut(position.as_ptr() as *mut isize,rank)}
-}
-/// casts a signed position to an unsigned position without normalizing it
-pub fn cast_to_unsigned(position:&[isize])->&[usize]{
-	let rank=position.len();
-	unsafe{slice::from_raw_parts(position.as_ptr() as *const usize,rank)}
-}
-/// casts a signed position to an unsigned position without normalizing it
-pub fn cast_to_unsigned_mut(position:&mut [isize])->&mut [usize]{
-	let rank=position.len();
-	unsafe{slice::from_raw_parts_mut(position.as_ptr() as *mut usize,rank)}
 }
 #[track_caller]
 /// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
@@ -573,17 +621,26 @@ pub fn compute_offset<I:SignedIndexPosition>(dims:&[usize],position:&[I],strides
 }
 /// rewind the position by 1. see rewind_position for more details
 pub fn decrement_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P])->usize{
+	assert_eq!(dims.len(),position.len());
+	let mut distance=1;
+													// this algorithm is conceptually similar to mixed-radix subtraction on the coordinates,
 	for (&dim,coordinate) in dims.iter().rev().zip(position.iter_mut().rev()){
-		let px=(*coordinate).try_into().ok().expect("coordinates must fit in isize");
-		let range=if px<0{-(dim as isize)..0}else{0..dim as isize};
+		if distance==0{break}
+		assert!(dim<=isize::MAX as usize);
+													// get coordinate and check bounds. as dim==0 case is already covered by bounds check, division by 0 problems won't occur later.
+		let mut px=coordinate.expect_isize("coordinates must fit in isize");
+		if !(-(dim as isize)..dim as isize).contains(&px){panic!("coordinate {px} is out of bounds for dim {dim}")};
 
-		let carry=px==range.start;
-		let qx=if carry{range.end}else{px}-1;
-
-		*coordinate=qx.try_into().ok().expect("updated coordinates must fit in their original type");
-		if !carry{return 0}
+		let carrybound=if px<0{-(dim as isize)}else{0};
+		px-=1;
+													// correct position if it exceeded the carry bound
+		let carry=px<carrybound;
+		if carry{px+=dim as isize}
+													// set coordinate to the updated value and update distance to be the distance to rewind along the next axis
+		*coordinate=px.expect_coordinate("updated coordinates must fit in their original type");
+		distance=if carry{1}else{0};
 	}
-	1
+	distance
 }
 #[track_caller]
 /// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
@@ -605,19 +662,28 @@ pub fn greater_equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims
 #[track_caller]
 /// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
 pub fn greater_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Greater}
-/// advance the position by 1. see advance_position for more details
+/// Same as advance_position(dims,1,position), but optimized to reduce division. see advance_position for more details
 pub fn increment_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P])->usize{
+	assert_eq!(dims.len(),position.len());
+	let mut distance=1;
+													// this algorithm is conceptually similar to mixed-radix addition on the coordinates,
 	for (&dim,coordinate) in dims.iter().rev().zip(position.iter_mut().rev()){
-		let px=(*coordinate).try_into().ok().expect("coordinates must fit in isize");
-		let range=if px<0{-(dim as isize)..0}else{0..dim as isize};
+		if distance==0{break}
+		assert!(dim<=isize::MAX as usize);
+													// get coordinate and check bounds. as dim==0 case is already covered by bounds check, division by 0 problems won't occur later.
+		let mut px=coordinate.expect_isize("coordinates must fit in isize");
+		if !(-(dim as isize)..dim as isize).contains(&px){panic!("coordinate {px} is out of bounds for dim {dim}")};
 
-		let carry=px==range.end-1;
-		let qx=if carry{range.start}else{px+1};
-
-		*coordinate=qx.try_into().ok().expect("updated coordinates must fit in their original type");
-		if !carry{return 0}
+		let carrybound=if px<0{0}else{dim as isize};
+		px+=1;
+													// correct position if it exceeded the carry bound
+		let carry=px>=carrybound;
+		if carry{px-=dim as isize}
+													// set coordinate to the updated value and update distance to be the distance to advance along the next axis
+		*coordinate=px.expect_coordinate("updated coordinates must fit in their original type");
+		distance=if carry{1}else{0};
 	}
-	1
+	distance
 }
 #[track_caller]
 /// compare if two positions refer to the same component.
@@ -626,31 +692,28 @@ pub fn less_equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[
 /// compare if two positions refer to the same component.
 pub fn less_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Less}
 #[track_caller]
-/// rewind by distance along the last axis. When the beginning of an axis is reached, loops around and rewinds the position along the next left axis. Panics if any coordinates fail to convert to isize or fail to convert back to their original type after updating. Returns a 'carry' value of how much a hypothetical next-left axis beyond what this function can see would have to be rewound to complete the operation. Bounds and dims are not explicitly checked, but it is expected that no dim exceeds isize::MAX, and their product does not overflow a usize, and that the position is in bounds. If those invariants are upheld, assuming numeric conversions for the position type are well-behaved, the signs of position will be preserved. Since count and by extension distance may be any usize, advance and rewind are separated rather than taking a signed distance. This function relies on division so consider using increment/decrement position for distances of +-1.
+/// Rewinds this position by `distance` steps in last-axis-fastest iteration order. Panics if any coordinates at indices reached are out of bounds or if any dims at indices visited exceed isize::MAX. Panics if dims and position have mismatched ranks. Also panics if coordinates fail to convert between the canonical isize and their stored types.
+/// Returns a carry value equal to the number of times the position has to wrap around the tensor before rewinding the full distance.
+/// This return value behaves like the carry from mixed-radix addition, allowing positions over multiple groups of axes to be rewound independently.
 pub fn rewind_position<P:SignedIndexPosition>(dims:&[usize],mut distance:usize,position:&mut [P])->usize{
-													// this algorithm is similar to sub assignment of a usize to a big endian mixed radix number
+	assert_eq!(dims.len(),position.len());
+													// this algorithm is conceptually similar to mixed-radix subtraction on the coordinates,
 	for (&dim,coordinate) in dims.iter().rev().zip(position.iter_mut().rev()){
 		if distance==0{break}
-		let (carry,updatedcoordinate);
-													// get adjustment to the current coordinate
+		assert!(dim<=isize::MAX as usize);
+													// get coordinate and check bounds. as dim==0 case is already covered by bounds check, division by 0 problems won't occur later.
+		let mut px=coordinate.expect_isize("coordinates must fit in isize");
+		if !(-(dim as isize)..dim as isize).contains(&px){panic!("coordinate {px} is out of bounds for dim {dim}")};
+													// we know at least distance/dim carries will be needed, but if subtracting distance%dim to the coordinate wraps around, we'll need one more. Negative coordinates wrap when they fall below -dim, positive coordinates wrap when they fall below 0.
+		let carrybound=if px<0{-(dim as isize)}else{0};
 		let dx=distance%dim;
-		let px=(*coordinate).try_into().ok().expect("coordinates must fit in isize");
-													// split by sign to avoid overflow, matching the signedness to the case similarly to advance position. However, since this is a rewind, the signedness will be opposite
-		if px>=0{
-			let dx=dx as isize;
-			let qx=px-dx;
 
-			carry=qx<0;
-			updatedcoordinate=qx+if carry{dim}else{0} as isize;
-		}else{
-			let px=(-px) as usize;
-			let qx=px+dx;
-
-			carry=qx>dim;
-			updatedcoordinate=-((qx-if carry{dim}else{0}) as isize);
-		}
-													// adjust position and calculate the distance for the next axis
-		*coordinate=updatedcoordinate.try_into().ok().expect("updated coordinates must fit in their original type");
+		px-=dx as isize;
+													// correct position if it exceeded the carry bound
+		let carry=px<carrybound;
+		if carry{px+=dim as isize}
+													// set coordinate to the updated value and update distance to be the distance to rewind along the next axis
+		*coordinate=px.expect_coordinate("updated coordinates must fit in their original type");
 		distance=carry as usize+distance/dim;
 	}
 	distance
@@ -683,15 +746,21 @@ pub fn unsign_position_slice<'a,P:SignedIndexPosition>(dims:&[usize],positions:&
 }
 
 #[derive(Clone,Debug,Default)]
-/// iterates over positions in a tensor
+/// Iterates over positions in a tensor, in row-major (last-axis-fastest) order.
+/// `front` and `back`, when present, are always valid in-bounds positions. Exhaustion is represented by iterator state rather than by storing out-of-bounds sentinel positions.
 pub struct PositionIter{layout:Layout,front:Option<Position>,back:Option<Position>}
 #[derive(Debug,Default)]
 #[cfg_attr(feature="serial",derive(Deserialize,Serialize))]
 #[repr(transparent)]
-/// wraps a signed tensor position stored as a reference counted slice of isize. Note that since the positions don't contain the dims, two positions alone cannot always be determined to refer or not refer to the same component in the case of negative positioning. Therefore, despite their PartialOrd implementation, one may want to compare positions using the position module's comparison functions instead, which include a dims argument
+/// A postion within a tensor. Coordinates are signed and stored in axis order. Cloning is inexpensive because its coordinates are stored in shared reference counted memory, however, mutating a position may require a more expensive cloning of the inner data (clone-on-write semantics).
+/// A Position contains one coordinate for each axis of a tensor. Positions use signed coordinates so that negative indexing may be represented prior to normalization.
+/// A Position does not include the tensor's dimensions. Consequently, two positions cannot always be compared for equality of the referenced component without also knowing the tensor's dimensions, since negative coordinates may normalize to different values depending on the dimensions.
+/// Still, PartialOrd<Position> for Position is implemented, returning None if the positions cannot be compared. (due to having opposite signs at any index, or having different ranks)
+/// For example Position::from([-1]).partial_cmp(Position::from([3])) is None, because we don't know whether the dim is 4 (making them equal) or some other value (making them unequal)
+/// However, Position::from([-1])==Position::from([-1]) is true, because those two positions would refer to the same component regardless of the dimension of axis 0.
 pub struct Position(Arc<[isize]>);
 #[derive(Clone,Debug,Default)]
-/// into iterator for Position
+/// Iterator over Position, yielding its coordinates in axis order.
 pub struct PositionIntoIter{position:Position,state:Range<usize>}
 
 /// bounds required for a type to be a signed index or position. These types should cleanly convert to and from isize, but TryFrom/TryInto are used instead of From/Into for convenience when using other integer types. Occasionally this means error results when converting the index may be possible, which may lead to out of bounds errors unexpectedly containing empty positions

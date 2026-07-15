@@ -330,6 +330,16 @@ impl<E> Tensor<E>{
 	pub fn into_buffer(self)->Vec<E>{self.0.into_buffer()}
 	/// convert into the inner data
 	pub fn into_inner(self)->(Vec<E>,Layout){self.0.into_inner()}
+	/// convert into an owned view
+	pub fn into_unique<'a>(self)->ViewRef<'a,E> where E:'a{
+		let (buffer,layout)=self.into_inner();
+		view::unique(buffer,layout)
+	}
+	/// convert into an owned view
+	pub fn into_unique_mut<'a>(self)->ViewMut<'a,E> where E:'a{
+		let (buffer,layout)=self.into_inner();
+		view::unique_mut(buffer,layout)
+	}
 	/// apply a function to every component, returning a new tensor
 	pub fn map<F:FnMut(E)->Y,Y>(mut self,f:F)->Tens<Y>{
 		error::unwrap_or_panic(self.0.checked_normalize_layout().map_err(|e|e.with_op("map")));
@@ -344,6 +354,30 @@ impl<E> Tensor<E>{
 	pub fn scalar(data:E)->Self{Self(Tens::scalar(data))}
 	/// set the layout. panic if the layout is invalid for the buffer
 	pub fn set_layout(&mut self,layout:Layout){error::unwrap_or_panic(self.try_set_layout(layout))}
+	#[track_caller]
+	/// slice dim. panics if the index or range are out of bounds
+	pub fn slice_dim<I:SignedIndexPosition>(mut self,index:impl SignedIndexPosition,range:impl RangeBounds<I>)->Self{
+		self.0.slice_dim(index,range);
+		self
+	}
+	#[track_caller]
+	/// slice. panics if the range are out of bounds
+	pub fn slice<I:SignedIndexPosition,R:RangeBounds<I>>(mut self,ranges:&[R])->Self{
+		self.0.slice(ranges);
+		self
+	}
+	#[track_caller]
+	/// squeeze an axis of dim 1 into nonexistence. panics if the dim at the index is not equal to 1. panics if out of bounds of the rank
+	pub fn squeeze_dim(mut self,index:impl SignedIndexPosition)->Self{
+		self.0.squeeze_dim(index);
+		self
+	}
+	#[track_caller]
+	/// swap a pair of axes.
+	pub fn swap_dims(mut self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->Self{
+		self.0.swap_dims(a,b);
+		self
+	}
 	/// create a new tensor. Err if the dims have a product greater than the data len
 	pub fn try_new(data:Vec<E>,dims:impl AsRef<[usize]>)->Result<Self>{Tens::try_new(data,dims).map(Tens::tensor)}
 	/// set the layout. Err if the layout is invalid for the buffer
@@ -354,9 +388,9 @@ impl<E> Tensor<E>{
 	/// convert back into a Tens
 	pub fn tens(self)->Tens<E>{self.0}
 	#[track_caller]
-	/// swap a pair of axes.
-	pub fn swap_dims(mut self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->Self{
-		self.0.swap_dims(a,b);
+	/// unsqueeze an axis of dim 1 into existence. panics if out of bounds of the rank
+	pub fn unsqueeze_dim(mut self,index:impl SignedIndexPosition)->Self{
+		self.0.unsqueeze_dim(index);
 		self
 	}
 	/// create a 1d tensor from a vector
@@ -479,6 +513,18 @@ impl<E> Tens<E>{
 			(buffer,layout)
 		}
 	}
+	#[track_caller]
+	/// convert into an owned view. panics if the layout is invalid
+	pub fn into_unique_ref<'a>(self)->ViewRef<'a,E> where E:'a{
+		let (buffer,layout)=self.into_inner();
+		view::unique(buffer,layout)
+	}
+	#[track_caller]
+	/// convert into an owned view. panics if the layout is invalid
+	pub fn into_unique_mut<'a>(self)->ViewMut<'a,E> where E:'a{
+		let (buffer,layout)=self.into_inner();
+		view::unique_mut(buffer,layout)
+	}
 	/// reference the layout
 	pub fn layout(&self)->&Layout{&self.layout}
 	/// reference the layout
@@ -527,12 +573,77 @@ impl<E> Tens<E>{
 	}
 	/// create a 0d tensor from a scalar
 	pub fn scalar(data:E)->Self{
-		let layout=Layout::new(Vec::new());
-		Self::from_inner(vec![data],layout)
+		Self::from_inner(vec![data],Layout::scalar())
 	}
 	/// set the buffer. Note that producing a Tens with a not mutably valid for its buffer is allowed, but may lead to incorrect behavior or panics on functions that assume layout validity
 	pub fn set_buffer(&mut self,buffer:Vec<E>){
 		self.replace_buffer(buffer);
+	}
+	#[track_caller]
+	/// slice dim. panics if the index or range are out of bounds or if the layout is invalid for the buffer. does not require mut layout validity, only shared
+	pub fn slice_dim<I:SignedIndexPosition>(&mut self,index:impl SignedIndexPosition,range:impl RangeBounds<I>)->&mut Self{
+		error::unwrap_or_panic(self.validate());
+
+		let mut buffer=self.take_buffer();
+		let mut offset=0;
+
+		self.layout.slice_dim(index,&mut offset,range);
+
+		buffer.drain(..offset);
+		buffer.truncate(self.layout.len());
+
+		self.set_buffer(buffer);
+		self
+	}
+	#[track_caller]
+	/// slice. panics if the range are out of bounds or if the layout is invalid for the buffer. does not require mut layout validity, only shared
+	pub fn slice<I:SignedIndexPosition,R:RangeBounds<I>>(&mut self,ranges:&[R])->&mut Self{
+		error::unwrap_or_panic(self.validate());
+
+		let mut buffer=self.take_buffer();
+		let mut offset=0;
+
+		self.layout.slice(&mut offset,ranges);
+
+		buffer.drain(..offset);
+		buffer.truncate(self.layout.len());
+
+		self.set_buffer(buffer);
+		self
+	}
+	#[track_caller]
+	/// split in two at the position. panics if out of bounds or the layout is invalid for the buffer
+	pub fn split_off(&mut self,index:impl SignedIndexPosition,position:impl SignedIndexPosition)->Self{
+		error::unwrap_or_panic(self.validate());
+		self.swap_dims(0,index).normalize_layout();
+
+		let dim =self.dims()[0];
+		let position=if let Some(px)=position::unsign_position(dim,position){px}else{panic!("position {} is out of bounds for dim {dim}",position.expect_isize("must be able to convert index to isize"))};
+
+		let at=position::compute_offset(&[dim],&[position],&[self.strides()[0]]);
+		let rldim=position;
+		let rllayout=self.layout_mut();
+		let rrdim=dim-position;
+		let mut rrlayout=rllayout.clone();
+
+		(rllayout.dims_mut()[0],rrlayout.dims_mut()[0])=(rldim,rrdim);
+
+		let mut buffer=self.take_buffer();
+		let newbuffer =buffer.split_off(at);
+
+		self.set_buffer(buffer);
+		self.swap_dims(0,index);
+
+		let mut result=Tens::from_inner(newbuffer,rrlayout);
+		result.swap_dims(0,index);
+
+		result
+	}
+	#[track_caller]
+	/// squeeze an axis of dim 1 into nonexistence. panics if the dim at the index is not equal to 1. panics if out of bounds of the rank. does not check buffer validity as this only modifies the layout
+	pub fn squeeze_dim(&mut self,index:impl SignedIndexPosition)->&mut Self{
+		self.layout.squeeze_dim(index);
+		self
 	}
 	/// reference the dims. Note that producing a Tens with a layout invalid for its buffer is allowed, but may lead to incorrect behavior or panics on functions that assume layout validity
 	pub fn strides_mut(&mut self)->&mut [isize]{self.layout_mut().strides_mut()}
@@ -557,6 +668,12 @@ impl<E> Tens<E>{
 		layout.validate(data.len()).map_err(|e|e.with_op("new"))?;
 
 		Ok(Self::from_inner(data,layout))
+	}
+	#[track_caller]
+	/// squeeze an axis of dim 1 into nonexistence. panics if out of bounds of the rank. does not check buffer validity as this only modifies the layout
+	pub fn unsqueeze_dim(&mut self,index:impl SignedIndexPosition)->&mut Self{
+		self.layout.unsqueeze_dim(index);
+		self
 	}
 	/// create a 1d tensor from a vector
 	pub fn vector(data:Vec<E>)->Self{
@@ -608,6 +725,18 @@ mod tests{
 		assert_eq!(normalized.dims()   ,[3,2,2]);
 		assert_eq!(normalized.strides(),[4,2,1]);
 	}
+	#[test]
+	fn split_off(){
+		let mut tens=Tens::vector(vec![101,102, 201,202, 301,302,
+		                               111,112, 211,212, 311,312]);
+		tens.layout=Layout::from_inner(vec![3,2,2],vec![2,6,1]);
+
+		let ten2=tens.split_off(0,1);
+
+		assert_eq!(tens,Tens::new(vec![101,102, 111,112],[1,2,2]));
+		assert_eq!(ten2,Tens::new(vec![201,202, 211,212,
+		                               301,302, 311,312],[2,2,2]));
+	}
 
 
 	use super::*;
@@ -625,8 +754,8 @@ pub struct Tens<E>{
 pub struct Tensor<E>(Tens<E>);
 
 use std::{
-	borrow::{Borrow,BorrowMut},cmp::{Eq,PartialEq},fmt::{Debug,Formatter,Result as FmtResult},hash::{Hash,Hasher},iter::FromIterator,mem,ops::{Deref,DerefMut,Index,IndexMut,Range},slice
+	borrow::{Borrow,BorrowMut},cmp::{Eq,PartialEq},fmt::{Debug,Formatter,Result as FmtResult},hash::{Hash,Hasher},iter::FromIterator,mem,ops::{Deref,DerefMut,Index,IndexMut,RangeBounds},slice
 };
 use super::{
-	Error,Layout,Position,Result,View,error,position::SignedIndexPosition,view::{ViewRef,ViewMut}
+	Error,Layout,Position,Result,View,error,position::{SignedIndexPosition,self},view::{ViewRef,ViewMut,self}
 };

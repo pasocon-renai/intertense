@@ -132,6 +132,8 @@ impl Layout{
 	pub fn positions(&self)->PositionIter{PositionIter::new(self.dims())}
 	/// returns the number of dims in the tensor
 	pub fn rank(&self)->usize{self.dims().len()}
+	/// create a layout for a scalar
+	pub fn scalar()->Self{Self::from_inner(Vec::new(),Vec::new())}
 	#[track_caller]
 	/// slice dim
 	pub fn slice_dim<I:SignedIndexPosition>(&mut self,index:impl SignedIndexPosition,offset:&mut usize,range:impl RangeBounds<I>)->&mut Self{
@@ -164,7 +166,7 @@ impl Layout{
 		}
 	}
 	#[track_caller]
-	/// squeeze an axis of dim 1 into nonexistence. panics if the dim at the index is not equal to 1. panics if out of bounds of the rank on the basis of symmetry with unsqueeze
+	/// squeeze an axis of dim 1 into nonexistence. panics if the dim at the index is not equal to 1. panics if out of bounds of the rank
 	pub fn squeeze_dim(&mut self,index:impl SignedIndexPosition)->&mut Self{
 		assert_eq!(self.dims().len(),self.strides().len());
 
