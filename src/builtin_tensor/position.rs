@@ -135,8 +135,10 @@ impl ExactSizeIterator for PositionIter{
 
 			acc+=(borrow*dim+back-front)*placevalue;
 			placevalue*=dim;
-		}										// since the bounds are exclusive, the accumulated difference is off by 1
-		if borrow>0{0}else{acc.saturating_sub(1)}
+		}										// if everything else in the iterator is working correctly, its construction should ensure back is always ahead of front,
+		debug_assert!(acc>0&&borrow==0);
+												// since the bounds are both exclusive, the accumulated difference is off by 1 from the iter len
+		acc-1
 	}
 }
 impl FromIterator<isize> for Position{
@@ -354,29 +356,26 @@ impl PositionIter{
 			Ok(i)=>i
 		}
 	}
-	#[track_caller]
-	/// create iterator with the dimensions and starting point. from is included. to isn't. Note that the returned iterator will contain all positions between from and to in a full position iteration, rather than only positions geometrically between from and to. Coordinate signs given in the input will be conserved with from signs mapping to forward iteration and to signs mapping to reverse iteration, however, the signs corresponding to None inputs are unspecified. panics if the dims are invalid (if any exceed isize::MAX, or their product overflows a usize)
-	pub fn range(dims:impl AsRef<[usize]>,from:impl Into<Option<Position>>,to:impl Into<Option<Position>>)->Self{// TODO ensure back is not less than front
-		let dims=dims.as_ref();
-		if let Err(e)=error::check_dims(dims){panic!("{}",e.with_op("positions"))}
-														// convert options
-		let (mut start,mut stop)=(from.into(),to.into());
-														// check bounds
-		if let Some(s)=start.as_ref()&&let Err(e)=error::check_bounds(dims,s){panic!("{}",e.with_op("positions"))}
-		if let Some(s)=stop .as_ref()&&let Err(e)=error::check_bounds(dims,s){panic!("{}",e.with_op("positions"))}
-														// make empty if bounds are equal
-		if let Some(s)=start.as_ref()&&let Some(z)=stop.as_ref()&&equals_position(dims,s,z){
-			(start,stop)=(None,None);
-		}												// decrement start since this is internally double exclusive
-		if let Some(s)=start.as_mut(){
-			if decrement_position(dims,s)>0{start=None}
-		}
-
-		let layout=Layout::from_inner(dims.to_vec(),Vec::new());
-		Self{layout,front:start,back:stop}
-	}
 	/// references the rank of the tensor whose position this iterates over
 	pub fn rank(&self)->usize{self.layout.rank()}
+	#[track_caller]
+	/// sets the bounds of the PositionIter. panics if either is out of bounds of self.dims(), or if front is at or after back. Note that both bounds are exclusive with respect to the remaining items in the iteration. This helps avoid necessarily allocating new positions every iteration; if the front bound was inclusive of the remaining items like in a standard half-open range, the value returned by next and the internal state of the iterator would differ and need different backing stores for the coordinates.
+	pub fn set_bounds(&mut self,front:impl Into<Option<Position>>,back:impl Into<Option<Position>>){
+		let (front,back)=(front.into(),back.into());
+		let dims=self.dims();
+
+		if let Some(front)=front.as_ref(){error::unwrap_or_panic(error::check_bounds(dims,front))}
+		if let Some(back )=back .as_ref(){error::unwrap_or_panic(error::check_bounds(dims,back ))}
+
+		if let Some(front)=front.as_ref()&&let Some(back)=back.as_ref(){assert!(less_position(dims,front,back))}
+		(self.front,self.back)=(front,back);
+	}
+	#[track_caller]
+	/// sets the bounds of the PositionIter. panics if either is out of bounds of self.dims(), or if front is at or after back. Note that both bounds are exclusive with respect to the remaining items in the iteration. This helps avoid necessarily allocating new positions every iteration; if the front bound was inclusive of the remaining items like in a standard half-open range, the value returned by next and the internal state of the iterator would differ and need different backing stores for the coordinates.
+	pub fn with_bounds(mut self,front:impl Into<Option<Position>>,back:impl Into<Option<Position>>)->Self{
+		self.set_bounds(front,back);
+		self
+	}
 }
 impl Position{
 	#[track_caller]

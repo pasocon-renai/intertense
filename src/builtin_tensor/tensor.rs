@@ -108,12 +108,13 @@ impl<E> FromIterator<E> for Tensor<E>{
 impl<E> FromIterator<E> for Tens  <E>{
 	fn from_iter<I:IntoIterator<Item=E>>(iter:I)->Self{Vec::from_iter(iter).into()}
 }
+/*// can't do this unfortunately due to ty
 impl<E> From<E> for Tensor<E>{
 	fn from(data:E)->Self{Self::scalar(data)}
 }
 impl<E> From<E> for Tens  <E>{
 	fn from(data:E)->Self{Self::scalar(data)}
-}
+}*/
 impl<E> From<Tensor<E>> for Tens<E>{
 	fn from(data:Tensor<E>)->Self{data.0}
 }
@@ -503,6 +504,11 @@ impl<E> Tens<E>{
 	}
 	/// unwrap the inner buffer
 	pub fn into_buffer(self)->Vec<E>{self.into_inner().0}
+	/// flatten into a vec. may have unexpected results if the layout is not mutably valid
+	pub fn into_flat_vec(mut self)->Vec<E>{
+		self.normalize_layout();
+		self.into_buffer()
+	}
 	/// convert into the inner data
 	pub fn into_inner(mut self)->(Vec<E>,Layout){
 		unsafe{		// safety: postcondition of Self::_from_raw_parts: When (ptr, len, cap) are not ok to put in Vec::from_raw_parts (borrowed buffer case), the resulting Tens must never convert its buffer to a slice or vec. Ensure all construction goes through _from_raw_parts.
@@ -682,6 +688,29 @@ impl<E> Tens<E>{
 	}
 }
 
+#[cfg(feature="serial")]
+mod serial{
+	impl<'a,E:Deserialize<'a>> Deserialize<'a> for Tens<E>{
+		fn deserialize<D:Deserializer<'a>>(deserializer:D)->StdResult<Self,D::Error>{
+			#[derive(Deserialize)]
+			struct Data<E>{data:Vec<E>,layout:Layout}
+			let t=Data::deserialize(deserializer)?;
+
+			Ok(Tens::from_inner(t.data,t.layout))
+		}
+	}
+	impl<E:Serialize> Serialize for Tens<E>{
+		fn serialize<S:Serializer>(&self,serializer:S)->StdResult<S::Ok,S::Error>{
+			#[derive(Serialize)]
+			struct Data<'a,E:'a>{data:&'a [E],layout:Layout}
+			Data{data:self.buffer(),layout:self.get_layout()}.serialize(serializer)
+		}
+	}
+
+	use serde::{Deserialize,Deserializer,Serialize,Serializer};
+	use std::{result::Result as StdResult};
+	use super::{Layout,Tens};
+}
 #[cfg(test)]
 mod tests{
 	#[test]
