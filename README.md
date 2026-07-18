@@ -1,1 +1,1 @@
-lightweight tensors and tensor interoperability things
+lightweight tensors and tensor-spreadsheet interoperability things
