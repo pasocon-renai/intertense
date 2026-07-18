@@ -724,6 +724,8 @@ impl<E> View<E>{
 	/// swap a pair of axes. unspecified result if the layout is invalid for the buffer
 	pub fn swap_dims(&self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->ViewRef<'_,E>{self.view_ref().swap_dims(a,b)}
 	/// convert to an owned tensor
+	pub fn to_tensor(&self)->Tensor<E> where E:Clone{self.to_tens().tensor()}
+	/// convert to an owned tensor
 	pub fn to_tens(&self)->Tens  <E> where E:Clone{
 		if self.0[0].buffer_cap()>0{
 			unsafe{		// safety: "If cap>0, (ptr, len, cap) must be ok to convert to Vec" - precondition on Tens construction. If this is the case, (ptr, len) should be fine as a slice

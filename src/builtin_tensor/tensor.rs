@@ -308,6 +308,9 @@ impl<E> Tensor<E>{
 	/// reference the buffer
 	pub fn buffer_mut(&mut self)->&mut [E]{self.0.buffer_mut()}
 	#[track_caller]
+	/// concatenate a collection of tensors along the specified axis
+	pub fn cat<I:IntoIterator>(collection:I,index:impl SignedIndexPosition)->Self where I::Item:Into<Self>{error::unwrap_or_panic(Self::try_cat(collection,index))}
+	#[track_caller]
 	/// create an empty tensor with the specified rank. panics if rank is 0
 	pub fn empty(rank:usize)->Self{Self(Tens::empty(rank))}
 	#[track_caller]
@@ -351,6 +354,12 @@ impl<E> Tensor<E>{
 	#[track_caller]
 	/// create a new tensor. Err if the dims have a product greater than the data len
 	pub fn new(data:Vec<E>,dims:impl AsRef<[usize]>)->Self{error::unwrap_or_panic(Self::try_new(data,dims))}
+	#[track_caller]
+	/// pads the dimension at index to at least to with val.
+	pub fn pad_dim_to(mut self,index:impl SignedIndexPosition,to:usize,val:E)->Self where E:Clone{
+		self.0.pad_dim_to_with(index,to,||val.clone());
+		self
+	}
 	/// create a 0d tensor from a scalar
 	pub fn scalar(data:E)->Self{Self(Tens::scalar(data))}
 	/// set the layout. panic if the layout is invalid for the buffer
@@ -374,10 +383,43 @@ impl<E> Tensor<E>{
 		self
 	}
 	#[track_caller]
+	/// reshape the tensor. panics if the new dims are invalid or the new count is different from the current count
+	pub fn reshape(mut self,dims:impl AsRef<[usize]>)->Self{
+		self.0.reshape(dims);
+		self
+	}
+	#[track_caller]
+	/// stack a collection of tensors along the specified axis
+	pub fn stack<I:IntoIterator>(collection:I,index:impl SignedIndexPosition)->Self where I::Item:Into<Self>{error::unwrap_or_panic(Self::try_stack(collection,index))}
+	#[track_caller]
 	/// swap a pair of axes.
 	pub fn swap_dims(mut self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->Self{
 		self.0.swap_dims(a,b);
 		self
+	}
+	/// concatenate a collection of tensors along the specified axis
+	pub fn try_cat<I:IntoIterator>(collection:I,index:impl SignedIndexPosition)->Result<Self> where I::Item:Into<Self>{
+		collection.into_iter().map(Into::into).try_fold(None,|mut acc:Option<Self>,mut item|{
+			if let Some(a)=acc.as_mut(){
+				a.0.try_append(&mut item.0,index).map_err(|e|e.with_op("cat"))?;
+			}else{
+				acc=Some(item);
+			}
+			Ok(acc)
+		})?.ok_or_else(||Error::empty_collection(Layout::default(),"cat"))
+	}
+	/// stack a collection of tensors along a new axis inserted at the specified index
+	pub fn try_stack<I:IntoIterator>(collection:I,index:impl SignedIndexPosition)->Result<Self> where I::Item:Into<Self>{
+		collection.into_iter().map(Into::into).try_fold(None,|mut acc:Option<Self>,mut item|{
+			if let Some(a)=acc.as_mut(){
+				let index=a.0.layout().try_normalize_index(index).map_err(|e|e.with_op("stack"))?;
+				a.0.try_append(item.0.unsqueeze_dim(index),index).map_err(|e|e.with_op("stack"))?;
+			}else{
+				let index=item.0.layout().try_normalize_index(index).map_err(|e|e.with_op("stack"))?;
+				acc=Some(item.unsqueeze_dim(index));
+			}
+			Ok(acc)
+		})?.ok_or_else(||Error::empty_collection(Layout::default(),"stack"))
 	}
 	/// create a new tensor. Err if the dims have a product greater than the data len
 	pub fn try_new(data:Vec<E>,dims:impl AsRef<[usize]>)->Result<Self>{Tens::try_new(data,dims).map(Tens::tensor)}
@@ -568,6 +610,27 @@ impl<E> Tens<E>{
 		self.set_buffer(buffer);
 		self
 	}
+	#[track_caller]
+	/// pads the dimension at index to at least to with val.
+	pub fn pad_dim_to(&mut self,index:impl SignedIndexPosition,to:usize,val:E) where E:Clone{self.pad_dim_to_with(index,to,||val.clone())}
+	#[track_caller]
+	/// pads the dimension at index to at least to size with val.
+	pub fn pad_dim_to_with<F:FnMut()->E>(&mut self,index:impl SignedIndexPosition,to:usize,val:F){
+		let ix=self.layout().normalize_index(index);
+		if self.dims()[ix as usize]>=to{return}
+
+		self.swap_dims(ix,0);
+		self.normalize_layout();
+
+		let mut buffer=self.take_buffer();
+		let layout=self.layout_mut();
+
+		buffer.resize_with(to*layout.strides()[0].abs() as usize,val);
+		layout.dims_mut()[0]=to;
+
+		self.set_buffer(buffer);
+		self.swap_dims(ix,0);
+	}
 	/// swap out the buffer.  Note that producing a Tens with a layout not mutably valid for its buffer is allowed, but may lead to incorrect behavior or panics on functions that assume layout validity
 	pub fn replace_buffer(&mut self,mut replacement:Vec<E>)->Vec<E>{
 		unsafe{		// safety: postcondition of Self::_from_raw_parts: When (ptr, len, cap) are not ok to put in Vec::from_raw_parts (borrowed buffer case), the resulting Tens must never convert its buffer to a slice or vec. Ensure all construction goes through _from_raw_parts.
@@ -576,6 +639,17 @@ impl<E> Tens<E>{
 
 			old
 		}
+	}
+	#[track_caller]
+	/// reshape the tensor. panics if the new dims are invalid or the new count is different from the current count
+	pub fn reshape(&mut self,dims:impl AsRef<[usize]>)->&mut Self{
+		let newlayout=Layout::new(dims);
+		self.normalize_layout();
+
+		assert_eq!(self.layout.count(),newlayout.count());
+		self.layout=newlayout;
+
+		self
 	}
 	/// create a 0d tensor from a scalar
 	pub fn scalar(data:E)->Self{
@@ -667,6 +741,32 @@ impl<E> Tens<E>{
 	pub fn tensor(self)->Tensor<E>{
 		error::unwrap_or_panic(self.layout().validate_mut(self.buffer_len()).map_err(|e|e.with_op("tensor")));
 		Tensor(self)
+	}
+	/// moves the components of other into self, concatenating along the specified axis. no broadcasting is performed. the operation will return Err if either tensor is invalid, or if the dimensions aside from at the index don't match.
+	pub fn try_append<I:SignedIndexPosition>(&mut self,b:&mut Tens<E>,index:I)->Result<&mut Self>{
+		self.validate_mut()?;
+		b.validate_mut()?;
+										// normalize index
+		let (ldms,rdms)=(self.dims(),b.dims());
+		let index=self.layout.try_normalize_index(index)?;
+										// check dims
+		for ix in 0..self.rank(){
+			if index==ix{continue}
+			if ldms[ix]!=rdms[ix]{return Err(Error::dim_mismatch(self.get_layout(),ix as isize,"append",b.get_layout()))}
+		}
+										// wlog the dim of interest to 0 by swapping. swap dims should succeed because we already had to check index validity to check dims. normalizing to the swapped layout allows this to be converted to a vector append
+		self.swap_dims(index,0).normalize_layout();
+		b   .swap_dims(index,0).normalize_layout();
+										// do the append
+		let (mut lbuf,mut rbuf)=(self.take_buffer(),b.take_buffer());
+		lbuf.append(&mut rbuf);
+										// adjust dims
+		self.dims_mut()[0]+=mem::take(&mut b.dims_mut()[0]);
+										// replace buffers and undo swap
+		(self.set_buffer(lbuf),b.set_buffer(rbuf));
+		(self.swap_dims(index,0),b.swap_dims(index,0));
+										// done
+		Ok(self)
 	}
 	/// create a new tensor. Err if the dims have a product greater than the data len
 	pub fn try_new(data:Vec<E>,dims:impl AsRef<[usize]>)->Result<Self>{

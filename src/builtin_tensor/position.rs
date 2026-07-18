@@ -269,7 +269,7 @@ impl<P:SignedIndexPosition> PartialEq<(&[P],&[usize])> for Position{
 	fn eq(&self,other:&(&[P],&[usize]))->bool{self.partial_cmp(other)==Some(Ordering::Equal)}
 }
 impl<P:SignedIndexPosition> PartialEq<(&[P],&Layout)> for Position{
-	fn eq(&self,other:&(&[P],&Layout))->bool{*self==(other.0,&**other.1.dims())}
+	fn eq(&self,other:&(&[P],&Layout))->bool{*self==(other.0,&*other.1.dims())}
 }
 impl PartialEq for Position{
 	fn eq(&self,other:&Self)->bool{self.partial_cmp(other)==Some(Ordering::Equal)}
@@ -296,7 +296,7 @@ impl<P:SignedIndexPosition> PartialOrd<(&[P],&[usize])> for Position{
 	}
 }
 impl<P:SignedIndexPosition> PartialOrd<(&[P],&Layout)> for Position{
-	fn partial_cmp(&self,other:&(&[P],&Layout))->Option<Ordering>{self.partial_cmp(&(other.0,&**other.1.dims()))}
+	fn partial_cmp(&self,other:&(&[P],&Layout))->Option<Ordering>{self.partial_cmp(&(other.0,other.1.dims()))}
 }
 impl PartialOrd for Position{
 	fn partial_cmp(&self,other:&Self)->Option<Ordering>{
@@ -330,36 +330,28 @@ impl TryFrom<Layout> for PositionIter{
 	type Error=Error;
 }
 impl TryFrom<&[usize]> for PositionIter{
-	fn try_from(dims:&[usize])->Result<Self>{
-		if let Err(e)=error::check_dims(dims){return Err(e.with_op("positions"))}
-
-		Ok(Self{
-			layout:Layout::from_inner(dims.to_vec(),Vec::new()),
-			front:None,back:None
-		})
-	}
+	fn try_from(dims:&[usize])->Result<Self>{Self::try_new(dims)}
 	type Error=Error;
 }
 
 impl PositionIter{
-	/// returns current back position, which is usually the most recent position from next_back, but may be None or an exclusive bound on the yielded position if next_back has not been called
+	/// returns current back position. After reverse iteration has begun this is typically the most recently yielded position from `next_back`. Before reverse iteration begins or after the iterator is exhausted, it may instead be an exclusive bound or `None`.
 	pub fn back(&self)->Option<Position>{self.back.clone()}
 	/// references the dimensions of the tensor whose position this iterates over
 	pub fn dims(&self)->&[usize]{self.layout.dims()}
-	/// returns current front position, which is usuallt the most recent position from next, but may be None or an exclusive bound on the yielded position if next_back has not been called
+	/// returns current front position. After iteration has begun this is typically the most recently yielded position from `next`. Before iteration begins or after the iterator is exhausted, it may instead be an exclusive bound or `None`.
 	pub fn front(&self)->Option<Position>{self.front.clone()}
 	#[track_caller]
-	/// creates a new position iter over the specified dimensions. The iterator will iterate once over every position in bounds of dims, with positive positions from forward iteration and negative positions from reverse iteration. panics if the dims are invalid (if any exceed isize::MAX, or their product overflows a usize)
-	pub fn new<D:AsRef<[usize]>>(dims:D)->Self{
-		match Self::try_from(dims.as_ref()){
-			Err(e)=>panic!("{e}"),
-			Ok(i)=>i
-		}
-	}
-	/// references the rank of the tensor whose position this iterates over
+	/// creates a new position iter over the specified dimensions. Panics if the dims are invalid (if any exceed isize::MAX, or their product overflows a usize)
+	/// The iterator visits every in-bounds position exactly once. Forward iteration begins at the zero position, while reverse iteration begins at the all -1 position. Though the coordinate data may not be identical, forward and reverse iteration produce an equivalent set of positions according to the signed indexing convention. Note that setting the bounds may affect the signs of the yieled position coordinates
+	pub fn new<D:AsRef<[usize]>>(dims:D)->Self{error::unwrap_or_panic(Self::try_new(dims))}
+	/// returns the rank of the tensor being iterated over
 	pub fn rank(&self)->usize{self.layout.rank()}
 	#[track_caller]
-	/// sets the bounds of the PositionIter. panics if either is out of bounds of self.dims(), or if front is at or after back. Note that both bounds are exclusive with respect to the remaining items in the iteration. This helps avoid necessarily allocating new positions every iteration; if the front bound was inclusive of the remaining items like in a standard half-open range, the value returned by next and the internal state of the iterator would differ and need different backing stores for the coordinates.
+	/// Sets the exclusive front and back bounds of the iterator. panics if either is out of bounds of self.dims(), or if front is at or after back.
+	/// `next` yields the first position strictly after `front`, while `next_back` yields the first position strictly before `back`.
+	/// Setting the bounds may affect the signs of the yieled position coordinates.
+	/// Note that both bounds are exclusive with respect to the remaining items in the iteration. This helps avoid necessarily allocating new positions every iteration; if the front bound was inclusive of the remaining items like in a standard half-open range, the value returned by next and the internal state of the iterator would differ and need different backing stores for the coordinates.
 	pub fn set_bounds(&mut self,front:impl Into<Option<Position>>,back:impl Into<Option<Position>>){
 		let (front,back)=(front.into(),back.into());
 		let dims=self.dims();
@@ -370,8 +362,21 @@ impl PositionIter{
 		if let Some(front)=front.as_ref()&&let Some(back)=back.as_ref(){assert!(less_position(dims,front,back))}
 		(self.front,self.back)=(front,back);
 	}
+	/// creates a new position iter over the specified dimensions. returns Err if the dims are invalid (if any exceed isize::MAX, or their product overflows a usize)
+	/// The iterator visits every in-bounds position exactly once. Forward iteration begins at the zero position, while reverse iteration begins at the all -1 position. Though the coordinate data may not be identical, forward and reverse iteration produce an equivalent set of positions according to the signed indexing convention. Note that setting the bounds may affect the signs of the yieled position coordinates.
+	fn try_new<D:AsRef<[usize]>>(dims:D)->Result<Self>{
+		let dims=dims.as_ref();
+		if let Err(e)=error::check_dims(dims){return Err(e.with_op("positions"))}
+
+		Ok(Self{
+			layout:Layout::from_inner(dims.to_vec(),Vec::new()),
+			front:None,back:None
+		})
+	}
 	#[track_caller]
-	/// sets the bounds of the PositionIter. panics if either is out of bounds of self.dims(), or if front is at or after back. Note that both bounds are exclusive with respect to the remaining items in the iteration. This helps avoid necessarily allocating new positions every iteration; if the front bound was inclusive of the remaining items like in a standard half-open range, the value returned by next and the internal state of the iterator would differ and need different backing stores for the coordinates.
+	/// Sets the exclusive front and back bounds of the iterator. panics if either is out of bounds of self.dims(), or if front is at or after back.
+	/// `next` yields the first position strictly after `front`, while `next_back` yields the first position strictly before `back`.
+	/// Note that both bounds are exclusive with respect to the remaining items in the iteration. This helps avoid necessarily allocating new positions every iteration; if the front bound was inclusive of the remaining items like in a standard half-open range, the value returned by next and the internal state of the iterator would differ and need different backing stores for the coordinates.
 	pub fn with_bounds(mut self,front:impl Into<Option<Position>>,back:impl Into<Option<Position>>)->Self{
 		self.set_bounds(front,back);
 		self
@@ -381,6 +386,7 @@ impl Position{
 	#[track_caller]
 	/// Advances this position by `distance` steps in last-axis-fastest iteration order. Panics if any coordinates at indices reached are out of bounds or if any dims at indices reached exceed isize::MAX, but may not reach all indices. Panics if dims and position have mismatched ranks
 	/// Returns a carry value equal to the number of times the position has to wrap around the tensor before advancing the full distance.
+	/// Setting the bounds may affect the signs of the yieled position coordinates.
 	/// This return value behaves like the carry from mixed-radix addition, allowing positions over multiple groups of axes to be advanced independently.
 	pub fn advance(&mut self,dims:&[usize],distance:usize)->usize{advance_position(dims,distance,self)}
 	/// References the coordinates as a mutable slice.
@@ -586,15 +592,19 @@ pub fn buffer_len(dims:&[usize],strides:&[isize])->usize{
 	dims.iter().rev().zip(strides.iter().rev()).fold(1,|acc,(&dim,&stride)|acc+(dim-1)*stride.abs() as usize)
 }
 #[track_caller]
-/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
+/// Compares two positions in last-axis-fastest iteration order. Panics if either position has a different rank than `dims`, or if either position contains an out-of-bounds coordinate.
 pub fn compare_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->Ordering{
 	let rank=dims.len();
-	if px.len()!=rank||qx.len()!=rank{panic!("mismatched rank")}
+
+	assert_eq!(px.len(),rank);
+	assert_eq!(qx.len(),rank);
 
 	for ix in 0..rank{
+		let (px,qx)=(px[ix].expect_isize("coordinates must fit in isize"),qx[ix].expect_isize("coordinates must fit in isize"));
 		let dim=dims[ix];
-		let px=if let Some(px)=unsign_position(dim,px[ix]){px}else{panic!("out of bounds")};
-		let qx=if let Some(qx)=unsign_position(dim,qx[ix]){qx}else{panic!("out of bounds")};
+
+		let px=if let Some(px)=unsign_position(dim,px){px}else{panic!("coordinate {px} is out of bounds for dim {dim} along axis {ix}")};
+		let qx=if let Some(qx)=unsign_position(dim,qx){qx}else{panic!("coordinate {qx} is out of bounds for dim {dim} along axis {ix}")};
 
 		match px.cmp(&qx){
 			Ordering::Equal=>continue,
@@ -603,7 +613,7 @@ pub fn compare_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usiz
 	}
 	Ordering::Equal
 }
-/// counts the components by taking the product of the dims
+/// counts the components by taking the product of the dims. does not check for overflow. use error::checked_count to check
 pub fn component_count(dims:&[usize])->usize{dims.iter().product()}
 #[track_caller]
 /// computes the offset of a component. panics if out of bounds
@@ -642,7 +652,7 @@ pub fn decrement_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P]
 	distance
 }
 #[track_caller]
-/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
+/// Compares two positions in last-axis-fastest iteration order. Panics if either position has a different rank than `dims`, or if either position contains an out-of-bounds coordinate.
 pub fn equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Equal}
 /// internal iteration over positions that lacks the overhead of the tricks PositionIter and Position use to avoid cloning. the iteration will start if the dims don't contain 0. the iteration will stop after reaching a state where each position is one less than the corresponding dim, when it rolls over to all 0. dims should be <= isize::MAX
 pub fn for_positions<F:FnMut(&mut [P])->ControlFlow<()>,P:SignedIndexPosition>(dims:&[usize],mut f:F,position:&mut [P]){
@@ -656,10 +666,10 @@ pub fn for_positions<F:FnMut(&mut [P])->ControlFlow<()>,P:SignedIndexPosition>(d
 	}
 }
 #[track_caller]
-/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
+/// Compares two positions in last-axis-fastest iteration order. Panics if either position has a different rank than `dims`, or if either position contains an out-of-bounds coordinate.
 pub fn greater_equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)!=Ordering::Less}
 #[track_caller]
-/// compare if two positions refer to the same component. panics if out of bounds or rank mismatch
+/// Compares two positions in last-axis-fastest iteration order. Panics if either position has a different rank than `dims`, or if either position contains an out-of-bounds coordinate.
 pub fn greater_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Greater}
 /// Same as advance_position(dims,1,position), but optimized to reduce division. see advance_position for more details
 pub fn increment_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P])->usize{
@@ -685,10 +695,10 @@ pub fn increment_position<P:SignedIndexPosition>(dims:&[usize],position:&mut [P]
 	distance
 }
 #[track_caller]
-/// compare if two positions refer to the same component.
+/// Compares two positions in last-axis-fastest iteration order. Panics if either position has a different rank than `dims`, or if either position contains an out-of-bounds coordinate.
 pub fn less_equals_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)!=Ordering::Greater}
 #[track_caller]
-/// compare if two positions refer to the same component.
+/// Compares two positions in last-axis-fastest iteration order. Panics if either position has a different rank than `dims`, or if either position contains an out-of-bounds coordinate.
 pub fn less_position<P:SignedIndexPosition,Q:SignedIndexPosition>(dims:&[usize],px:&[P],qx:&[Q])->bool{compare_position(dims,px,qx)==Ordering::Less}
 #[track_caller]
 /// Rewinds this position by `distance` steps in last-axis-fastest iteration order. Panics if any coordinates at indices reached are out of bounds or if any dims at indices visited exceed isize::MAX. Panics if dims and position have mismatched ranks. Also panics if coordinates fail to convert between the canonical isize and their stored types.
@@ -717,7 +727,7 @@ pub fn rewind_position<P:SignedIndexPosition>(dims:&[usize],mut distance:usize,p
 	}
 	distance
 }
-/// computes an unsigned position component given a signed position component. If the position is < -dim, >= dim, or not castable to isize, returns None. If position<0, returns the value of dim+position. Otherwise, returns the value of position
+/// Normalizes a signed coordinate into the range `0..dim`. Returns `None` if the coordinate cannot be represented as `isize` or lies outside the valid signed range `[-dim, dim)`.
 pub fn unsign_position(dim:usize,position:impl SignedIndexPosition)->Option<usize>{
 									// cast
 	let position=position.try_into().ok()?;
@@ -728,25 +738,19 @@ pub fn unsign_position(dim:usize,position:impl SignedIndexPosition)->Option<usiz
 	if position<0{return Some((dim as isize+position) as usize)}
 	Some(position as usize)
 }
-/// computes the unsigned index given a signed index. If the index is < -rank, >= rank, or not castable to isize, returns None. If index<0, returns the value of dim+index. Otherwise, returns the value of index
+/// Normalizes a signed index into the range `0..rank`. Returns `None` if the index cannot be represented as `isize` or lies outside the valid signed range `[-rank, rank)`.
 pub fn unsign_index(index:impl SignedIndexPosition,rank:usize)->Option<usize>{unsign_position(rank,index)}
-/// computes the unsigned start or end of range given a signed end of range. unlike unsign_position(dim,stop), when dim==stop, this returns dim rather than none
+/// Normalizes a signed range bound into the range `0..=dim`. This is like unsign_position, except this function accepts `dim` itself as a valid result, making it suitable for normalizing exclusive range endpoints.
 pub fn unsign_range_bound(dim:usize,rb:impl SignedIndexPosition)->Option<usize>{
 	let rb=rb.try_into().ok()?;
 	if dim as isize==rb{return Some(dim)}
 
 	unsign_position(dim,rb)
 }
-#[track_caller]
-/// unsign a slice of positions
-pub fn unsign_position_slice<'a,P:SignedIndexPosition>(dims:&[usize],positions:&'a mut [P])->Option<&'a mut [P]>{
-	for (&dim,px) in dims.iter().zip(positions.iter_mut()){*px=P::try_from(unsign_position(dim,*px)? as isize).ok()?}
-	Some(positions)
-}
 
 #[derive(Clone,Debug,Default)]
-/// Iterates over positions in a tensor, in row-major (last-axis-fastest) order.
-/// `front` and `back`, when present, are always valid in-bounds positions. Exhaustion is represented by iterator state rather than by storing out-of-bounds sentinel positions.
+/// Iterates over positions in a tensor, in row-major (last-axis-fastest) order. PositionIter stores exclusive optional front and back bounds that move inward as iteration proceeds. `front` and `back`, when present, are always valid in-bounds positions. Exhaustion is represented by iterator state rather than by storing out-of-bounds sentinel positions.
+/// The exclusivity of both bounds may seem odd if one is accustomed to inclusive or half-open ranges, but it useful in ensuring that both stored PositionIter positions are always valid postions, and that next and next_back don't need to reallocate the inner position data in order to yield an item and store an updated item.
 pub struct PositionIter{layout:Layout,front:Option<Position>,back:Option<Position>}
 #[derive(Debug,Default)]
 #[cfg_attr(feature="serial",derive(Deserialize,Serialize))]
@@ -762,7 +766,8 @@ pub struct Position(Arc<[isize]>);
 /// Iterator over Position, yielding its coordinates in axis order.
 pub struct PositionIntoIter{position:Position,state:Range<usize>}
 
-/// bounds required for a type to be a signed index or position. These types should cleanly convert to and from isize, but TryFrom/TryInto are used instead of From/Into for convenience when using other integer types. Occasionally this means error results when converting the index may be possible, which may lead to out of bounds errors unexpectedly containing empty positions
+/// bounds required for a type to be a signed index or position. These types should cleanly convert to and from isize, but TryFrom/TryInto are used instead of From/Into for convenience when using other integer types.
+/// Because these conversions may fail, diagnostics that attempt to reconstruct a Position may fall back to an empty position if one or more coordinates cannot be represented.
 pub trait SignedIndexPosition:Copy+TryFrom<isize>+TryInto<isize>{
 	#[track_caller]
 	/// shortcut for self.expect_isize().try_into().ok().expect()
