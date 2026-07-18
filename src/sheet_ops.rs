@@ -4,7 +4,7 @@
 pub fn xlookup<'a,E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&E,lookupvalues:&View<X>,returnvalues:&'a View<X>,notfound:impl Into<Option<&'a X>>,mmode:impl Into<Option<i32>>,smode:impl Into<Option<i32>>)->Option<&'a X>{xmatch(lookupquery,lookupvalues,mmode,smode).map(|ix|&returnvalues[ix]).or_else(||notfound.into())}
 #[track_caller]
 /// search for a component's position within a tensor view. Supported m modes: -1=find query's floor, 0 (default)=exact (==), 1=find query's ceil. Supported s modes: -1=reverse, 1 (default)=forward, 2=binary ascending, -2=binary descending. //TODO m mode -2=wildcard (?=single character, *=any sequence, ~=?, *, or ~)
-pub fn xmatch <   E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&E,lookupvalues:&View<X>,                                                           mmode:impl Into<Option<i32>>,smode:impl Into<Option<i32>>)->Option<Position>{
+pub fn xmatch <   E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&E,lookupvalues:&View<X>,mmode:impl Into<Option<i32>>,smode:impl Into<Option<i32>>)->Option<Position>{
 	let (binary,reverse)=match smode.into().unwrap_or(1){
 		-1=>(false,true),1=>(false,false),
 		-2=>(true ,true),2=>(true ,false),
@@ -36,7 +36,7 @@ pub fn xmatch <   E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&
 				}
 			}else{
 				if ceilfloorcandidate==Some(Ordering::Less){
-					ix.rewind(dims);
+					ix.decrement(dims);
 				}    {
 					Some(ix)
 				}
@@ -45,7 +45,7 @@ pub fn xmatch <   E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&
 		}
 	}else{
 		let mut best:Option<(&X,Position)>=None;
-		for ix in (!reverse).then(||lookupvalues.indices()).into_iter().flatten().chain(reverse.then(||lookupvalues.indices().rev()).into_iter().flatten()){
+		for ix in (!reverse).then(||lookupvalues.positions()).into_iter().flatten().chain(reverse.then(||lookupvalues.positions().rev()).into_iter().flatten()){
 			let r=lookupvalues[&ix].partial_cmp(lookupquery);
 
 			if r==None{continue}

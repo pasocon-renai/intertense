@@ -1,4 +1,4 @@
-impl<E:Default,S:AsRef<Path>> LoadSheet<S> for IOResult<Tensor<E>> where Tensor<E>:for<'a> ReadSheet<&'a Spreadsheet>{
+impl<E:Default,S:AsRef<Path>> LoadSheet<S> for IOResult<Tens<E>> where Tens<E>:for<'a> ReadSheet<&'a Spreadsheet>{
 	fn load_sheet(sheetpath:S)->Self{
 		let mut result=Ok(Default::default());
 
@@ -6,41 +6,39 @@ impl<E:Default,S:AsRef<Path>> LoadSheet<S> for IOResult<Tensor<E>> where Tensor<
 		result
 	}
 }
-impl<E:Default,S:AsRef<Path>> LoadSheet<S> for Tensor<E> where Tensor<E>:for<'a> ReadSheet<&'a Path>{
+impl<E:Default,S:AsRef<Path>> LoadSheet<S> for Tens<E> where Tens<E>:for<'a> ReadSheet<&'a Path>{
 	fn load_sheet(sheetpath:S)->Self{Self::from_sheet(sheetpath.as_ref())}
 }
-impl<E:Default> From<Spreadsheet> for Tensor<E> where Tensor<E>:ReadSheet<Spreadsheet>{
-	fn from(sheet:Spreadsheet)->Tensor<E>{Self::from_sheet(sheet)}
+impl<E:Default> From<Spreadsheet> for Tens<E> where Tens<E>:ReadSheet<Spreadsheet>{
+	fn from(sheet:Spreadsheet)->Tens<E>{Self::from_sheet(sheet)}
 }
-impl<E:Default> From<Worksheet> for Tensor<E> where Tensor<E>:ReadSheet<Worksheet>{
-	fn from(sheet:Worksheet)->Tensor<E>{Self::from_sheet(sheet)}
+impl<E:Default> From<Worksheet> for Tens<E> where Tens<E>:ReadSheet<Worksheet>{
+	fn from(sheet:Worksheet)->Tens<E>{Self::from_sheet(sheet)}
 }
-impl<E:Default> ReadSheet<&Path> for IOResult<Tensor<E>> where Tensor<E>:for<'a> ReadSheet<&'a Spreadsheet>{
+impl<E:Default> ReadSheet<&Path> for IOResult<Tens<E>> where Tens<E>:for<'a> ReadSheet<&'a Spreadsheet>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Path){
 		let x=match xlsx::read(sheet){Err(e)=>return *self=Err(IOError::new(IOErrorKind::Other,e)),Ok(x)=>x};
 		if let Ok(t)=self{return t.read_sheet(indices,&x)}
 
-		let mut t:Tensor<E>=Default::default();
+		let mut t:Tens<E>=Default::default();
 		t.read_sheet(indices,&x);
 
 		*self=Ok(t)
 	}
 }
-impl<E:Default> ReadSheet<&Path> for Tensor<E> where Tensor<E>:for<'a> ReadSheet<&'a Spreadsheet>{
+impl<E:Default> ReadSheet<&Path> for Tens<E> where Tens<E>:for<'a> ReadSheet<&'a Spreadsheet>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Path){
 		if self.dims().len()==0&&self.buffer_len()==0{
-			self.dims_mut().push(0);
-			self.strides_mut().push(1);
+			self.layout_mut().push_axis(0,1);
 		}
 		let x=xlsx::read(sheet).unwrap();
 		self.read_sheet(indices,&x);
 	}
 }
-impl<E:Default> ReadSheet<&Spreadsheet> for Tensor<E> where Tensor<E>:for<'a> ReadSheet<&'a Worksheet>{
+impl<E:Default> ReadSheet<&Spreadsheet> for Tens<E> where Tens<E>:for<'a> ReadSheet<&'a Worksheet>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Spreadsheet){
 		if self.dims().len()==0&&self.buffer_len()==0{
-			self.dims_mut().push(0);
-			self.strides_mut().push(1);
+			self.layout_mut().push_axis(0,1);
 		}
 		assert!(indices.len()>=3);
 		let im3=indices.len()-3;
@@ -51,17 +49,16 @@ impl<E:Default> ReadSheet<&Spreadsheet> for Tensor<E> where Tensor<E>:for<'a> Re
 		}
 	}
 }
-impl<E:Default> ReadSheet<Spreadsheet> for Tensor<E> where Tensor<E>:for<'a> ReadSheet<&'a Spreadsheet>{
+impl<E:Default> ReadSheet<Spreadsheet> for Tens<E> where Tens<E>:for<'a> ReadSheet<&'a Spreadsheet>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:Spreadsheet){self.read_sheet(indices,&sheet)}
 }
-impl<E:Default> ReadSheet<Worksheet> for Tensor<E> where Tensor<E>:for<'a> ReadSheet<&'a Worksheet>{
+impl<E:Default> ReadSheet<Worksheet> for Tens<E> where Tens<E>:for<'a> ReadSheet<&'a Worksheet>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:Worksheet){self.read_sheet(indices,&sheet)}
 }
-impl ReadSheet<&Worksheet> for Tensor<Option<Cell>>{
+impl ReadSheet<&Worksheet> for Tens<Option<Cell>>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Worksheet){
 		if self.dims().len()==0&&self.buffer_len()==0{
-			self.dims_mut().push(0);
-			self.strides_mut().push(1);
+			self.layout_mut().push_axis(0,1);
 		}
 		assert!(indices.len()>=2);
 
@@ -72,10 +69,10 @@ impl ReadSheet<&Worksheet> for Tensor<Option<Cell>>{
 			self.unsqueeze_dim(0);
 		}
 
-		self.pad_dim(-2,xstop as usize,None);
-		self.pad_dim(-1,ystop as usize,None);
+		self.pad_dim_to(-2,xstop as usize,None);
+		self.pad_dim_to(-1,ystop as usize,None);
 		if im2>0{
-			self.pad_dim(-3,(indices[im2-1]+1) as usize,None);
+			self.pad_dim_to(-3,(indices[im2-1]+1) as usize,None);
 		}
 
 		for x in 0..xstop{
@@ -87,11 +84,10 @@ impl ReadSheet<&Worksheet> for Tensor<Option<Cell>>{
 		}
 	}
 }
-impl ReadSheet<&Worksheet> for Tensor<String>{
+impl ReadSheet<&Worksheet> for Tens<String>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Worksheet){
 		if self.dims().len()==0&&self.buffer_len()==0{
-			self.dims_mut().push(0);
-			self.strides_mut().push(1);
+			self.layout_mut().push_axis(0,1);
 		}
 		assert!(indices.len()>=2);
 
@@ -102,10 +98,10 @@ impl ReadSheet<&Worksheet> for Tensor<String>{
 			self.unsqueeze_dim(0);
 		}
 
-		self.pad_dim(-2,xstop as usize,String::new());
-		self.pad_dim(-1,ystop as usize,String::new());
+		self.pad_dim_to(-2,xstop as usize,String::new());
+		self.pad_dim_to(-1,ystop as usize,String::new());
 		if im2>0{
-			self.pad_dim(-3,(indices[im2-1]+1) as usize,String::new());
+			self.pad_dim_to(-3,(indices[im2-1]+1) as usize,String::new());
 		}
 
 		for x in 0..xstop{
@@ -117,11 +113,10 @@ impl ReadSheet<&Worksheet> for Tensor<String>{
 		}
 	}
 }
-impl ReadSheet<&Worksheet> for Tensor<f32>{
+impl ReadSheet<&Worksheet> for Tens<f32>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Worksheet){
 		if self.dims().len()==0&&self.buffer_len()==0{
-			self.dims_mut().push(0);
-			self.strides_mut().push(1);
+			self.layout_mut().push_axis(0,1);
 		}
 		assert!(indices.len()>=2);
 
@@ -132,10 +127,10 @@ impl ReadSheet<&Worksheet> for Tensor<f32>{
 			self.unsqueeze_dim(0);
 		}
 
-		self.pad_dim(-2,xstop as usize,f32::NAN);
-		self.pad_dim(-1,ystop as usize,f32::NAN);
+		self.pad_dim_to(-2,xstop as usize,f32::NAN);
+		self.pad_dim_to(-1,ystop as usize,f32::NAN);
 		if im2>0{
-			self.pad_dim(-3,(indices[im2-1]+1) as usize,f32::NAN);
+			self.pad_dim_to(-3,(indices[im2-1]+1) as usize,f32::NAN);
 		}
 
 		for x in 0..xstop{
@@ -147,11 +142,10 @@ impl ReadSheet<&Worksheet> for Tensor<f32>{
 		}
 	}
 }
-impl ReadSheet<&Worksheet> for Tensor<f64>{
+impl ReadSheet<&Worksheet> for Tens<f64>{
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:&Worksheet){
 		if self.dims().len()==0&&self.buffer_len()==0{
-			self.dims_mut().push(0);
-			self.strides_mut().push(1);
+			self.layout_mut().push_axis(0,1);
 		}
 		assert!(indices.len()>=2);
 
@@ -162,9 +156,9 @@ impl ReadSheet<&Worksheet> for Tensor<f64>{
 			self.unsqueeze_dim(0);
 		}
 
-		self.pad_dim(-2,xstop as usize,f64::NAN);
-		self.pad_dim(-1,ystop as usize,f64::NAN);
-		if im2>0{self.pad_dim(-3,(indices[im2-1]+1) as usize,f64::NAN)}
+		self.pad_dim_to(-2,xstop as usize,f64::NAN);
+		self.pad_dim_to(-1,ystop as usize,f64::NAN);
+		if im2>0{self.pad_dim_to(-3,(indices[im2-1]+1) as usize,f64::NAN)}
 
 		for x in 0..xstop{
 			indices[im2]=x as isize;
@@ -221,8 +215,8 @@ mod tests{
 			CellPattern::Numeric,CellPattern::Numeric,CellPattern::Numeric,CellPattern::Numeric,CellPattern::Numeric,
 		];
 
-		let mut data:Tensor<String>=Tensor::load_sheet(matrixfile);
-		let mut pattern:Tensor<CellPattern>=Tensor::from(pattern);
+		let mut data:Tens<String>=Tens::load_sheet(matrixfile);
+		let mut pattern:Tens<CellPattern>=Tens::from(pattern);
 
 		data.slice(&[0..3,0..5,0..30]);
 		pattern.reshape([17,5]);
@@ -230,18 +224,18 @@ mod tests{
 
 		let (table, _cost)=match_tensor::grab_table_default(data,pattern);
 
-		assert_eq!(table.view_ref().swap_dims(-1,-2).to_flat_vec(None),expected);
+		assert_eq!(table.view_ref().swap_dims(-1,-2).flat_vec(None),expected);
 	}
 	#[test]
 	fn read_matrix(){
 		let matrixfile="Matrix November 10th FINAL.xlsx";
-		let numbers:Tensor<f32>=Tensor::load_sheet(matrixfile);
-		let text:Tensor<String>=Tensor::load_sheet(matrixfile);
+		let numbers:Tens<f32>=Tens::load_sheet(matrixfile);
+		let text:Tens<String>=Tens::load_sheet(matrixfile);
 
 		assert!(numbers[[0,0,0]].is_nan());
 		assert!(numbers[[0,0,1]].is_nan());
 		assert!(numbers[[0,1,0]].is_nan());
-		assert_eq!(numbers.into_view().slice([1..2,2..4,3..8]).swap_dims(-1,-2).into_tensor().into_flat_vec(None),vec![80.0,80.0,80.0,75.0,75.0,70.0,70.0,65.0,70.0,65.0]);
+		assert_eq!(numbers.tensor().slice(&[1..2,2..4,3..8]).swap_dims(-1,-2).tens().flat_vec(None),vec![80.0,80.0,80.0,75.0,75.0,70.0,70.0,65.0,70.0,65.0]);
 		assert_eq!(text[[0,0,1]],"test");
 	}
 	use super::*;
@@ -263,7 +257,7 @@ pub trait ReadSheet<S>{
 	/// reads the tensor from excel format
 	fn read_sheet(&mut self,indices:&mut [isize],sheet:S);
 }
-use crate::builtin_tensor::Tensor;
+use crate::builtin_tensor::Tens;
 use std::{
 	io::{Error as IOError,ErrorKind as IOErrorKind,Result as IOResult},path::Path
 };

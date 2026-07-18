@@ -12,16 +12,17 @@ pub enum ConversionError<I,N,O>{Input(I),Intermediate(N),Output(O)}*/
 //mod xmatch;
 /// Builtin tensor functionality.
 /// For this library's purposes...
-/// An **axis** is an abstract geometric direction in which tensor components may be arranged.
-/// A **count** is the total number of components in a tensor, not necessarily the same as its length.
-/// A **dimension** (dim) a tensor's extent along a particular axis.
+/// An **axis** is an abstract geometric direction in which tensor components may be arranged. For consistency with common tensor operation names, _dim rather than _axis suffix may be applied to function names that apply to a specific axis
+/// A **count** is the total number of components in a tensor, not necessarily the same as its length. Count can be any value of usize, though particularly large counts might be not useful due to only being achievable through broadcasting views that are never realized.
+/// A **dimension** (dim) a tensor's extent along a particular axis. Dims should not exceed isize::MAX, and their product should not exceed usize::MAX.
 /// An **index** (ix) is a signed integer selecting an axis.
-/// A **layout** is a tensor's dimensions and strides, usually stored in a Layout. It doesn't include offsets, which are handled separately at a view specific level since owned tensors are eagerly trimmed.
-/// A **length** (len) is the length in-use of a tensor's buffer, not necessarily the same its count
+/// A **layout** is a tensor's dimensions and strides, usually stored in a Layout. It doesn't include offsets, which are handled separately at a view specific level since owned tensors are eagerly trimmed. Layouts have 2 varying degrees of validity. A layout may have either no validity (invalid), shared validity (shared-valid), or mutable validity (mut-valid), with the difference between shared-valid and mut-valid being that mut-valid layouts are not allowed to have multiple positions refer to the same component. A layout is considered invalid if any of its dims exceed isize::MAX, if their product exceeds usize::MAX, if its buffer length overflows isize, or if its dims and strides have mismatched ranks. Layouts that are not invalid are considered 'valid', however, a valid layout is only 'valid for' buffer lengths greater than the greatest component offset of a tensor with that layout.
+/// A **length** (len) is the length in-use of a tensor's buffer, not necessarily the same its count.
 /// A **position** (px) tells the location of a component along one or more axes. Generally has type Position if possibly more than one, type isize if known at coding time to be only one.
 /// A **coordinate** is a singular position.
 /// A **rank** is the number of axes in a tensor.
-/// A **view** is tensor described by it's own layout and offset, and a buffer from another preexisting tensor
+/// A **view** is tensor described by it's own layout and a buffer pointer from another preexisting tensor
+/// A list of ranges of coordinates refers to the slice of components whose positions along each axis are within the corresponding range. A range of lists of coordinates refers to the components at positions between the range bounds in an iteration last-axis-fastest ordered with respect to position
 pub mod builtin_tensor;
 #[cfg(feature="burn-ml")]
 /// machine learning interop with burn

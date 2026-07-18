@@ -34,10 +34,10 @@ mod tests{
 			0.5,0.1,0.4,0.4,0.3,
 		];
 
-		data.reshape([3,5]);
+		data=data.reshape([3,5]);
 		fill_holes(&mut data,0,|&x|x,|&x|x==0.0);
 
-		assert_eq!(data.into_flat_vec(None),filled);
+		assert_eq!(data.flat_vec(None),filled);
 	}
 
 	use super::*;
@@ -49,7 +49,7 @@ pub enum CellPattern{
 	#[default]
 	/// any value
 	Anything,
-	/// parable bool equal to
+	/// parsable bool equal to
 	Bool(bool),
 	/// parsable bool
 	Boolean,
@@ -72,7 +72,7 @@ pub fn arg_max_by_key<E,K:PartialOrd>(data:impl AsRef<View<E>>,mut f:impl FnMut(
 	let data=data.as_ref();
 	let mut position=Position::new(data.rank());
 
-	for ix in data.indices(){
+	for ix in data.positions(){
 		let f=f(&data[&ix]);
 		if {
 			if let Some(x)=&best{f>*x}else{true}
@@ -85,14 +85,14 @@ pub fn arg_max_by_key<E,K:PartialOrd>(data:impl AsRef<View<E>>,mut f:impl FnMut(
 	position
 }
 #[track_caller]
-/// Perform a binary search of a lexicographically ordered multidimensional index space using mixed-radix arithmetic. For correct behavior, dims should be <= isize::MAX, and the components from which the underlying ordering is derived should have an order that would make them sorted if they were flattened into a vec
+/// Perform a binary search of a lexicographically ordered multidimensional position space using mixed-radix arithmetic. For correct behavior, dims should be <= isize::MAX, and the components from which the underlying ordering is derived should have an order that would make them sorted if they were flattened into a vec
 /// check(ix) can be read as comparing a candidate component at ix to a query as if by candidate.partial_cmp(query)
-/// Failed comparisons (check returns None) are interpreted with the ordering of the nearest successful comparison at a smaller index. If no such comparison exists, it's interpreted as less.
+/// Failed comparisons (check returns None) are interpreted with the ordering of the nearest successful comparison at a smaller position. If no such comparison exists, it's interpreted as less.
 /// Ok(ix) indicates a successful search where check(ix)==Some(Equal).
 /// Err(ix) means no equal candidate was found, where ix is the insertion position in lexicographic order, even if actually inserting like that in a tensor would be inconvenient.
-/// When the insertion position is at the end and the returned index has to be one past the last valid index, ix[0] is equal to dims[0] and ix[1..] are all 0.
-/// For a scalar, dims==[], and the only index ix==[]. The result in this case is Ok([]) if check([])==Some(Equal), and Err([]) otherwise
-/// For an empty tensor, dims contains 0, and no valid indices exist. The result in this case is an Err containing all 0s.
+/// When the insertion position is at the end and the returned position has to be one past the last valid position, px[0] is equal to dims[0] and px[1..] are all 0.
+/// For a scalar, dims==[], and the only position [x==[]. The result in this case is Ok([]) if check([])==Some(Equal), and Err([]) otherwise
+/// For an empty tensor, dims contains 0, and no valid positions exist. The result in this case is an Err containing all 0s.
 pub fn binary_search_by<F:FnMut(Position)->Option<Ordering>>(mut check:F,dims:&[usize])->Result<Position,Position>{
 	let rank=dims.len();						// get rank and allocate mid position
 	let mut mid=Position::new(rank);
@@ -112,7 +112,7 @@ pub fn binary_search_by<F:FnMut(Position)->Option<Ordering>>(mut check:F,dims:&[
 		temp.copy_from_slice(mid);
 		loop{
 			if start==temp{break Ordering::Less}
-			temp.rewind(dims);
+			temp.decrement(dims);
 
 			if let Some(r)=check(temp.clone()){
 				if r==Ordering::Greater{mid.copy_from_slice(&temp)}
@@ -134,7 +134,7 @@ pub fn binary_search_by<F:FnMut(Position)->Option<Ordering>>(mut check:F,dims:&[
 		match check(mid.clone()).unwrap_or_else(||linear_probe(&mut check,&mut mid,&start,&mut temp)){
 			Ordering::Equal=>return Ok(mid),	// return exact midpoint if equal
 			Ordering::Less =>{					// mid is less, so binary search starting from mid+1
-				mid.advance(dims);
+				mid.increment(dims);
 				start.copy_from_slice(&mid);
 			},
 			Ordering::Greater=>{				// mid is greater, so binary search stopping excluded at mid
@@ -158,7 +158,7 @@ pub fn compare_subtensors<'a,E:'a,X:'a,Y:'a>(data:impl 'a+AsRef<View<E>>,mut f:i
 	for n in 0..r{ld[n]=ld[n].saturating_sub(rd[n].saturating_sub(1))}
 
 	let mut ranges=vec![0..0;ld.len()];
-	GridIter::from_shared_layout(layout.clone()).map(move|ix|{
+	PositionIter::try_from(layout.clone()).unwrap().map(move|ix|{
 		let rd=template.as_ref().dims();
 		for n in 0..r{ranges[n]=ix[n]..ix[n]+rd[n] as isize}
 
@@ -172,9 +172,9 @@ pub fn fill_holes<E,F:FnMut(&E)->E,G:FnMut(&E)->bool>(data:&mut View<E>,dim:isiz
 	let l=data.rank();
 	let mut left=Position::new(0);
 
-	for ix in data.indices(){
+	for ix in data.positions(){
 		if is_hole(&data[&ix]){
-			if left.len()>0&&left[..l-1]==ix[..l-1]{data[&ix]=fill_hole(&data[&left])}
+			if left.len()>0&&left.as_slice()[..l-1]==ix.as_slice()[..l-1]{data[&ix]=fill_hole(&data[&left])}
 		}
 		left.clone_from(&ix);
 	}
@@ -195,13 +195,13 @@ pub fn grab_table<E:Clone,X>(data:impl AsRef<View<E>>,mut f:impl FnMut(&E,&X)->f
 	//let patterndims=pattern.dims();
 	let mut ranges:Vec<Range<usize>>=pattern.dims().iter().map(|&x|0..x).collect();
 
-	let (c,ix)=compare_subtensors(&data,|d,p,ix|(d.indices().map(|jx|f(&d[&jx],&p[jx])).sum::<f32>(),ix),pattern).min_by(|x,y|x.0.total_cmp(&y.0)).unwrap();
+	let (c,ix)=compare_subtensors(&data,|d,p,ix|(d.positions().map(|jx|f(&d[&jx],&p[jx])).sum::<f32>(),ix),pattern).min_by(|x,y|x.0.total_cmp(&y.0)).unwrap();
 	for n in 0..ix.len(){
 		ranges[n].start=ix[n] as usize;
 		ranges[n].end +=ix[n] as usize;
 	}
 
-	(data.slice(ranges).into_tensor(),c)
+	(data.slice(&ranges).to_tensor(),c)
 }
 
 /// fuzzy finds a table based on the cell pattern
@@ -214,7 +214,7 @@ pub fn grab_table_default(data:impl AsRef<View<String>>,pattern:impl AsRef<View<
 
 use b_k_tree::{metrics::Levenshtein,DiscreteMetric};
 use crate::{
-	builtin_tensor::{GridIter,Position,Tensor,View}
+	builtin_tensor::{PositionIter,Position,tensor::Tensor,View}
 };
 use std::{
 	cmp::{Ordering,PartialOrd},ops::Range,sync::OnceLock

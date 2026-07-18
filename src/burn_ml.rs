@@ -1,15 +1,55 @@
-impl<B:Backend,K:BasicOps<B>,const N:usize> TryFrom<Tens<K::Elem>> for Tensor<B,N,K>{
-	fn try_from(tensor:Tens<K::Elem>)->Result<Self,Self::Error>{
+impl<B:Backend,K:BasicOps<B>,const N:usize> TryFrom<BuiltinTensor<K::Elem>> for Tensor<B,N,K>{
+	fn try_from(tensor:BuiltinTensor<K::Elem>)->Result<Self,Self::Error>{
 		if tensor.rank()!=N{return Err(TensorError::specific_rank_mismatch(tensor.get_layout(),N,"convert"))}
 		let dims=tensor.dims().to_vec();
 
-		let data=tensor.into_flat_vec();
+		let data=tensor.flat_vec(None);
 		let device=&Default::default();
 		let tensordata=TensorData::new(data,dims);
 
 		Ok(Tensor::from_data(tensordata, device))
 	}
 	type Error=TensorError;
+}
+impl<B:Backend,K:BasicOps<B>,const N:usize> TryFrom<Tens<K::Elem>> for Tensor<B,N,K>{
+	fn try_from(tensor:Tens<K::Elem>)->Result<Self,Self::Error>{
+		tensor.validate()?;
+
+		if tensor.rank()!=N{return Err(TensorError::specific_rank_mismatch(tensor.get_layout(),N,"convert"))}
+		let dims=tensor.dims().to_vec();
+
+		let data=tensor.flat_vec(None);
+		let device=&Default::default();
+		let tensordata=TensorData::new(data,dims);
+
+		Ok(Tensor::from_data(tensordata, device))
+	}
+	type Error=TensorError;
+}
+impl<B:Backend,K:BasicOps<B>,const N:usize> TryFrom<&View<K::Elem>> for Tensor<B,N,K>{
+	fn try_from(tensor:&View<K::Elem>)->Result<Self,Self::Error>{
+		tensor.validate()?;
+
+		if tensor.rank()!=N{return Err(TensorError::specific_rank_mismatch(tensor.get_layout(),N,"convert"))}
+		let dims=tensor.dims().to_vec();
+
+		let data=tensor.flat_vec(None);
+		let device=&Default::default();
+		let tensordata=TensorData::new(data,dims);
+
+		Ok(Tensor::from_data(tensordata, device))
+	}
+	type Error=TensorError;
+}
+impl<B:Backend,K:BasicOps<B>,const N:usize> TryFrom<Tensor<B,N,K>> for BuiltinTensor<K::Elem>{
+	fn try_from(value:Tensor<B,N,K>)->Result<Self,Self::Error>{
+		let data=value.to_data();
+		let layout=Layout::new(&data.shape);
+
+		let data=data.to_vec()?;
+		Ok(Tens::from_inner(data,layout).tensor())
+	}
+	type Error=DataError;
 }
 impl<B:Backend,K:BasicOps<B>,const N:usize> TryFrom<Tensor<B,N,K>> for Tens<K::Elem>{
 	fn try_from(value:Tensor<B,N,K>)->Result<Self,Self::Error>{
@@ -103,6 +143,7 @@ pub fn serialize_ulong_tensor<B:Backend,S:Serializer,const N:usize>(tensor:&Tens
 use burn::{
 	prelude::*,tensor::{BasicOps,DataError,Element}
 };
-use crate::builtin_tensor::{Error as TensorError,Layout,Tens};
+use crate::builtin_tensor::{Error as TensorError,Layout,Tens,tensor::Tensor as BuiltinTensor,view::View};
 #[cfg(feature="serial")]
 use serde::{Deserialize,Deserializer,Serialize,Serializer,de::Error as Derror,ser::Error as Serror};
+
