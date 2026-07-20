@@ -217,7 +217,7 @@ impl Layout{
 		let index=position::unsign_index(index,dims.len()).unwrap();
 
 		dims[index]=stop-start;
-		*offset+=if stride<0{dim-start}else{start}*stride.abs() as usize;
+		*offset+=if stride<0{dim-stop}else{start}*stride.abs() as usize;
 
 		self
 	}
@@ -341,7 +341,15 @@ impl Layout{
 		}
 		error::check_bounds(&newdims,&position).map_err(|e|e.with_layout(self.clone()).with_op("slice"))?;
 																// now that bounds are checked correct newdims to the dims of the resulting layout
-		for ix in 0..rank{newdims[ix]-=position::unsign_range_bound(dims[ix],position[ix]).unwrap()+1}
+		for ix in 0..rank{
+			let dim=dims[ix];
+			let start=position[ix];
+			let stride=strides[ix];
+			let stop=newdims[ix]-1;
+
+			newdims[ix]=stop-position::unsign_range_bound(dim,start).unwrap();
+			if stride<0{position[ix]=(dim-stop) as isize}
+		}
 		*offset+=position::compute_offset(dims,&position,strides).clamp(0,self.len());
 																// create new layout
 		position.copy_from_slice(strides);

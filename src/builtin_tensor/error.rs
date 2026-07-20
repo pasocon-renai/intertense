@@ -444,6 +444,7 @@ pub fn check_shape_match(adims:&[usize],bdims:&[usize])->Result<()>{
 pub fn diagnostic_layout(dims:&[usize],strides:&[isize])->Layout{Layout::from_inner(dims.to_vec(),strides.to_vec())}
 /// create a layout that lacks strides for diagnostic purposes specifically relating to dimensions
 pub fn diagnostic_shape(dims:&[usize])->Layout{Layout::from_inner(dims.to_vec(),Vec::new())}
+#[track_caller]
 /// unwrap or panic with the error display rather than the usual unwrap panic
 pub fn unwrap_or_panic<T,E:Display>(result:StdResult<T,E>)->T{
 	match result{

@@ -264,6 +264,8 @@ impl<   E:PartialEq<X>,X> PartialEq<View   <   X>> for Tens  <E>{
 	fn eq(&self,other:&View   <   X>)->bool{(**self)==(*other)}
 	fn ne(&self,other:&View   <   X>)->bool{(**self)!=(*other)}
 }
+unsafe impl<E:Send> Send for Tens<E>{}
+unsafe impl<E:Sync> Sync for Tens<E>{}
 impl<E> TryFrom<Tens<E>> for Tensor<E>{
 	fn try_from(inner:Tens<E>)->Result<Self>{
 		inner.validate_mut().map_err(|e|e.with_op("tensor"))?;
@@ -335,7 +337,7 @@ impl<E> Tensor<E>{
 	/// convert into the inner data
 	pub fn into_inner(self)->(Vec<E>,Layout){self.0.into_inner()}
 	/// convert into an owned view
-	pub fn into_unique<'a>(self)->ViewRef<'a,E> where E:'a{
+	pub fn into_unique_ref<'a>(self)->ViewRef<'a,E> where E:'a{
 		let (buffer,layout)=self.into_inner();
 		view::unique(buffer,layout)
 	}
@@ -344,12 +346,18 @@ impl<E> Tensor<E>{
 		let (buffer,layout)=self.into_inner();
 		view::unique_mut(buffer,layout)
 	}
+	#[track_caller]
+	/// apply a function to every component. reuses the buffer
+	pub fn map_in_place<F:FnMut(&mut E)>(mut self,f:F)->Self{
+		self.as_mut_view().map_in_place(f);
+		self
+	}
 	/// apply a function to every component, returning a new tensor
-	pub fn map<F:FnMut(E)->Y,Y>(mut self,f:F)->Tens<Y>{
+	pub fn map<F:FnMut(E)->Y,Y>(mut self,f:F)->Tensor<Y>{
 		error::unwrap_or_panic(self.0.checked_normalize_layout().map_err(|e|e.with_op("map")));
 											// with the layout normalized, this has predictable iteration order
 		let (buffer,layout)=self.0.into_inner();
-		Tens::from_inner(buffer.into_iter().map(f).collect(),layout)
+		Tensor(Tens::from_inner(buffer.into_iter().map(f).collect(),layout))
 	}
 	#[track_caller]
 	/// create a new tensor. Err if the dims have a product greater than the data len
@@ -360,6 +368,12 @@ impl<E> Tensor<E>{
 		self.0.pad_dim_to_with(index,to,||val.clone());
 		self
 	}
+	#[track_caller]
+	/// mtaches the dims of same rank tensors by padding
+	pub fn pad_match<'a,A:IntoIterator<Item=&'a mut I>,I:'a+AsMut<Tensor<E>>>(tensors:A,val:E) where E:Clone{Self::pad_match_with(tensors,||val.clone())}
+	#[track_caller]
+	/// mtaches the dims of same rank tensors by padding
+	pub fn pad_match_with<'a,A:IntoIterator<Item=&'a mut I>,F:FnMut()->E,I:'a+AsMut<Tensor<E>>>(tensors:A,val:F){Tens::pad_match_with(tensors.into_iter().map(|e|&mut e.as_mut().0),val)}
 	/// create a 0d tensor from a scalar
 	pub fn scalar(data:E)->Self{Self(Tens::scalar(data))}
 	/// set the layout. panic if the layout is invalid for the buffer
@@ -445,6 +459,9 @@ impl<E> Tensor<E>{
 	}
 }
 impl<E> Tens<E>{
+	#[track_caller]
+	/// moves the components of other into self, concatenating along the specified axis. no broadcasting is performed. the operation will return panic if either tensor is invalid, or if the dimensions aside from at the index don't match.
+	pub fn append<I:SignedIndexPosition>(&mut self,b:&mut Tens<E>,index:I)->&mut Self{error::unwrap_or_panic(self.try_append(b,index))}
 	/// get the pointer to the buffer
 	pub fn as_mut_ptr(&mut self)->*mut E{self.ptr}// break deref cycle
 	/// get the pointer to the buffer
@@ -489,6 +506,9 @@ impl<E> Tens<E>{
 			slice::from_raw_parts(self.as_ptr(),self.buffer_len())
 		}
 	}
+	#[track_caller]
+	/// concatenate a collection of tensors along the specified axis
+	pub fn cat<I:IntoIterator>(collection:I,index:impl SignedIndexPosition)->Self where I::Item:Into<Self>{Tensor::cat(collection.into_iter().map(|e|e.into().tensor()),index).tens()}
 	/// normalize the tensor to a contiguous layout. returns Err if the layout is not mutably valid for the buffer
 	pub fn checked_normalize_layout(&mut self)->Result<&mut Self>{
 		self.validate_mut().map_err(|e|e.with_op("rearrange"))?;
@@ -579,14 +599,8 @@ impl<E> Tens<E>{
 	pub fn layout_mut(&mut self)->&mut Layout{&mut self.layout}
 	#[track_caller]
 	/// apply a function to every component. panics if the layout is not mutably valid for the buffer
-	pub fn map<F:FnMut(&mut E)>(&mut self,mut f:F)->&mut Self{
-		error::unwrap_or_panic(self.validate_mut().map_err(|e|e.with_op("map")));
-
-		if self.is_layout_normalized(){
-			self.buffer_mut().iter_mut().for_each(f)
-		}else{
-			for px in self.positions(){f(&mut self[px])}
-		};
+	pub fn map_in_place<F:FnMut(&mut E)>(&mut self,f:F)->&mut Self{
+		self.as_mut_view().map_in_place(f);
 		self
 	}
 	#[track_caller]
@@ -630,6 +644,27 @@ impl<E> Tens<E>{
 
 		self.set_buffer(buffer);
 		self.swap_dims(ix,0);
+	}
+	#[track_caller]
+	/// mtaches the dims of same rank tensors by padding
+	pub fn pad_match<'a,A:IntoIterator<Item=&'a mut I>,I:'a+AsMut<Tens<E>>>(tensors:A,val:E) where E:Clone{Self::pad_match_with(tensors,||val.clone())}
+	#[track_caller]
+	/// mtaches the dims of same rank tensors by padding
+	pub fn pad_match_with<'a,A:IntoIterator<Item=&'a mut I>,F:FnMut()->E,I:'a+AsMut<Tens<E>>>(tensors:A,mut val:F){
+		let mut tensors:Vec<&'a mut I>=tensors.into_iter().collect();
+		if tensors.len()==0{return}
+
+		let mut dims=tensors[0].as_mut().dims().to_vec();
+
+		for d in tensors.iter_mut().map(|i|i.as_mut().dims()){
+			if d.len()!=dims.len(){panic!()}
+			for (&d,e) in d.iter().zip(dims.iter_mut()){*e=d.max(*e)}
+		}
+		for t in tensors.iter_mut().map(|i|i.as_mut()){
+			for d in 0..dims.len(){
+				t.pad_dim_to_with(d as isize,dims[d],&mut val)
+			}
+		}
 	}
 	/// swap out the buffer.  Note that producing a Tens with a layout not mutably valid for its buffer is allowed, but may lead to incorrect behavior or panics on functions that assume layout validity
 	pub fn replace_buffer(&mut self,mut replacement:Vec<E>)->Vec<E>{
@@ -832,7 +867,7 @@ mod tests{
 		ten2.layout=Layout::from_inner(vec![3,2,2],vec![2,6,1]);
 
 		let tensor=tens.clone().tensor().map(|x|x+1);
-		tens.map(|x|*x+=1);
+		tens.map_in_place(|x|*x+=1);
 
 		assert_eq!(tens,ten2);
 		assert_eq!(tensor,ten2);
@@ -871,7 +906,8 @@ mod tests{
 	use super::*;
 }
 
-/// A growable multidimensional array type, abbreviated from Tensor (Similar to Vec). Layout validity is lazily checked, and producing a Tens with a layout invalid for its buffer is allowed, but failing to maintain mutable validity may lead to panics or unexpected behavior of some functions. The default value is an empty tensor with dims [0]
+/// A growable multidimensional collection, abbreviated from Tensor (Similar to Vec). Layout validity is lazily checked, and producing a Tens with a layout invalid for its buffer is allowed, but failing to maintain mutable validity may lead to panics or unexpected behavior of some functions. The default value is an empty tensor with dims [0]
+/// Tens implements common shape manipulation ops with &mut chaining, and has Tens specific methods with a collections focus.
 pub struct Tens<E>{
 	layout:Layout,	// layout info, possibly modified
 	ptr:*mut E,		// buffer pointer.
@@ -880,6 +916,7 @@ pub struct Tens<E>{
 }
 #[repr(transparent)]
 /// A tensor value that operates in a functional style, with mostly chain-move functions rather than chain-mut functions. mutable Layout validity is checked on construction. The default value is an empty tensor with dims [0]
+/// Tensor implements common shape manipulation ops with owned chaining
 pub struct Tensor<E>(Tens<E>);
 
 use std::{

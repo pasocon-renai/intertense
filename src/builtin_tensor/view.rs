@@ -144,7 +144,13 @@ impl<   E,P:SignedIndexPosition> Index<&[P]> for View<E>{
 			let offset=position::compute_offset(dims,position,strides);
 			let ptr=self.as_ptr();
 
-			if offset>self.get_len(){return error::unwrap_or_panic(Err(Error::invalid_layout(self.get_layout(),"index")))}
+			if offset>self.get_len(){
+				let layout=self.get_layout();
+
+				error::unwrap_or_panic::<(),_>(error::check_bounds(dims,position).map_err(|e|e.with_layout(layout.clone()).with_op("index")));
+				error::unwrap_or_panic::<(),_>(Err(Error::buffer_too_small(layout.clone(),self.get_len(),layout.len(),"index")));
+				panic!("internal error: index");
+			}
 			&    *ptr.add(offset)
 		}
 	}
@@ -209,7 +215,7 @@ impl<   E,P:SignedIndexPosition> IndexMut<&[P]> for View<E>{
 			let offset=position::compute_offset(dims,position,strides);
 			let ptr=self.as_mut_ptr();
 
-			if offset>self.get_len(){return error::unwrap_or_panic(Err(Error::invalid_layout(self.get_layout(),"index")))}
+			if offset>self.get_len(){return error::unwrap_or_panic(Err(Error::out_of_bounds(self.get_layout(),"index",Position::try_from_coordinates(position).unwrap_or_default())))}
 			&mut *ptr.add(offset)
 		}
 	}
@@ -502,6 +508,12 @@ impl<'a,E> ViewMut<'a,E>{
 		}
 	}
 	#[track_caller]
+	/// apply a function to every component
+	pub fn map_in_place<F:FnMut(&mut E)>(&mut self,f:F)->&mut Self{
+		(**self).map_in_place(f);
+		self
+	}
+	#[track_caller]
 	/// slice dim. panics if the index or range are out of bounds
 	pub fn slice_dim<I:SignedIndexPosition>(mut self,index:impl SignedIndexPosition,range:impl RangeBounds<I>)->Self{
 		unsafe{						// safety: to maintain invariants, ensure layout versions of the ops can't convert valid to invalid.
@@ -662,6 +674,21 @@ impl<E> View<E>{
 	pub fn flip_dim(&self,index:impl SignedIndexPosition)->ViewRef<'_,E>{self.view_ref().flip_dim(index)}
 	/// reverse the order of components along all axes
 	pub fn flip(&self)->ViewRef<'_,E>{self.view_ref().flip()}
+	#[track_caller]
+	/// apply a function to every component. panics if the layout is not shared valid for the buffer
+	pub fn for_each<F:FnMut(&E)>(&self,mut f:F){
+		if self.is_layout_normalized(){
+			unsafe{		// safety: if a normalized layout with count==len meets this type's invariants, ptr must be valid for references up to ptr+len
+				let ptr=self.as_ptr();
+				let len=self.get_len();
+						// with the layout normalized, this has predictable iteration order
+				slice::from_raw_parts(ptr,len).iter().for_each(f)
+			}
+		}else{
+			error::unwrap_or_panic(self.validate());
+			for px in self.positions(){f(&self[px])}
+		};
+	}
 	/// get the layout
 	pub fn get_layout(&self)->Layout{self.0[0].layout().clone()}
 	/// get the internal buffer length. Depending on where the View came from, this may be the length a sub-buffer of the actual allocated buffer
@@ -684,7 +711,7 @@ impl<E> View<E>{
 			unsafe{		// safety: if a normalized layout with count==len meets this type's invariants, ptr must be valid for references up to ptr+len
 				let ptr=self.as_ptr();
 				let len=self.get_len();
-						// with the layout normalized, this has predictable iteration order
+				// with the layout normalized, this has predictable iteration order
 				slice::from_raw_parts(ptr,len).iter().map(f).collect()
 			}
 		}else{
@@ -699,10 +726,54 @@ impl<E> View<E>{
 
 		Tens::from_inner(buffer,layout)
 	}
+	#[track_caller]
+	/// apply a function to every component. panics if the layout is not mutably valid for the buffer
+	pub fn map_in_place<F:FnMut(&mut E)>(&mut self,mut f:F)->&mut Self{
+		if self.is_layout_normalized(){
+			unsafe{		// safety: if a normalized layout with count==len meets this type's invariants, ptr must be valid for references up to ptr+len
+				let ptr=self.as_mut_ptr();
+				let len=self.get_len();
+						// with the layout normalized, this has predictable iteration order
+				slice::from_raw_parts_mut(ptr,len).iter_mut().map(f).collect()
+			}
+		}else{
+			error::unwrap_or_panic(self.validate_mut());
+			for px in self.positions(){f(&mut self[px])}
+		};
+		self
+	}
+	#[track_caller]
+	/// apply a function to every component, returning a new tensor. panics if the layout is invalid for the buffer
+	pub fn map_mut<F:FnMut(&mut E)->Y,Y>(&mut self,mut f:F)->Tens<Y>{
+		let buffer=if self.is_layout_normalized(){
+			unsafe{		// safety: if a normalized layout with count==len meets this type's invariants, ptr must be valid for references up to ptr+len
+				let ptr=self.as_mut_ptr();
+				let len=self.get_len();
+						// with the layout normalized, this has predictable iteration order
+				slice::from_raw_parts_mut(ptr,len).iter_mut().map(f).collect()
+			}
+		}else{
+			error::unwrap_or_panic(self.validate_mut());
+
+			let mut b=Vec::with_capacity(self.count());
+			for px in self.positions(){b.push(f(&mut self[px]))}
+
+			b
+		};				// the result will have normalized layout
+		let layout=Layout::new(self.dims());
+
+		Tens::from_inner(buffer,layout)
+	}
 	/// iterate over the positions in the tensor
 	pub fn positions(&self)->PositionIter{PositionIter::new(self.dims())}
 	/// return the tensor rank. unspecified result if dims and strides have different ranks
 	pub fn rank(&self)->usize{self.0[0].layout().rank()}
+	#[track_caller]
+	/// reshape the tensor. panics if the new dims are invalid or the new count is different from the current count
+	pub fn reshape(&self,dims:impl AsRef<[usize]>)->Tensor<E> where E:Clone{
+		error::unwrap_or_panic(self.validate());
+		Tens::from_inner(self.flat_vec(None),Layout::new(dims)).tensor()
+	}
 	#[track_caller]
 	/// slice dim. panics if the index or range are out of bounds or if the layout is invalid for the buffer
 	pub fn slice_dim<I:SignedIndexPosition>(&self,index:impl SignedIndexPosition,range:impl RangeBounds<I>)->ViewRef<'_,E>{self.view_ref().slice_dim(index,range)}
@@ -726,7 +797,7 @@ impl<E> View<E>{
 	/// convert to an owned tensor
 	pub fn to_tensor(&self)->Tensor<E> where E:Clone{self.to_tens().tensor()}
 	/// convert to an owned tensor
-	pub fn to_tens(&self)->Tens  <E> where E:Clone{
+	pub fn to_tens  (&self)->Tens  <E> where E:Clone{
 		if self.0[0].buffer_cap()>0{
 			unsafe{		// safety: "If cap>0, (ptr, len, cap) must be ok to convert to Vec" - precondition on Tens construction. If this is the case, (ptr, len) should be fine as a slice
 				let ptr=self.as_ptr();
@@ -769,7 +840,7 @@ impl<E> View<E>{
 	/// unsqueeze an axis of dim 1 into existence. panics if out of bounds of the rank or if the layout is invalid
 	pub fn unsqueeze_dim(&self,index:impl SignedIndexPosition)->ViewRef<'_,E>{self.view_ref().unsqueeze_dim(index)}
 	/// check validity of the layout for the buffer len
-	pub fn validate(&self)->Result<()>{self.get_layout().validate(self.get_len())}
+	pub fn validate    (&self)->Result<()>{self.get_layout().validate(self.get_len())}
 	/// check validity of the layout for the buffer len
 	pub fn validate_mut(&self)->Result<()>{self.get_layout().validate_mut(self.get_len())}
 	#[track_caller]
