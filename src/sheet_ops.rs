@@ -1,8 +1,8 @@
 
-#[track_caller]
+//#[track_caller]
 /// search for a component's position within a tensor view, then access another component in another view with that position
 pub fn xlookup<'a,E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&E,lookupvalues:&View<X>,returnvalues:&'a View<X>,notfound:impl Into<Option<&'a X>>,mmode:impl Into<Option<i32>>,smode:impl Into<Option<i32>>)->Option<&'a X>{xmatch(lookupquery,lookupvalues,mmode,smode).map(|ix|&returnvalues[ix]).or_else(||notfound.into())}
-#[track_caller]
+//#[track_caller]
 /// search for a component's position within a tensor view. Supported m modes: -1=find query's floor, 0 (default)=exact (==), 1=find query's ceil. Supported s modes: -1=reverse, 1 (default)=forward, 2=binary ascending, -2=binary descending. //TODO m mode -2=wildcard (?=single character, *=any sequence, ~=?, *, or ~)
 pub fn xmatch <   E:Display,X:Display+PartialOrd<E>+PartialOrd<X>>(lookupquery:&E,lookupvalues:&View<X>,mmode:impl Into<Option<i32>>,smode:impl Into<Option<i32>>)->Option<Position>{
 	let (binary,reverse)=match smode.into().unwrap_or(1){
