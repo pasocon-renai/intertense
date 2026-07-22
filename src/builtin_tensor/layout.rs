@@ -9,7 +9,7 @@ impl Default for Validity{
 }*/
 impl Layout{
 	#[track_caller]
-	/// broadcast a specific axis. Panics if the current or resulting layout is invalid, or if the index is out of bounds.
+	/// broadcast a specific axis. Panics if the current or resulting layout is invalid, or if the index is out of bounds. Note that this is a symmetric broadcast rather than a to broadcast
 	/// If the dimension at the index is 1 and rhs!=1, the axis's dim and stride are set to (rhs, 0). If rhs==1, the dim and stride are unaffected.
 	pub fn broadcast_dim(&mut self,index:impl SignedIndexPosition,rhs:usize)->&mut Self{
 		error::unwrap_or_panic(self.check().map_err(|e|e.with_op("broadcast")));
@@ -20,7 +20,7 @@ impl Layout{
 		let dim=self.dims()[index];
 		if dim==1{
 			assert!(rhs<=isize::MAX as usize);
-			assert!(self.count().checked_mul(rhs).is_some());
+			assert!(self.count().checked_mul(rhs).is_some(),"The count after broadcasting must fit in usize");
 
 			self.   dims_mut()[index]=rhs;
 			self.strides_mut()[index]=0;
@@ -31,8 +31,24 @@ impl Layout{
 		self
 	}
 	#[track_caller]
-	/// try broadcasting the dims, panicingif the dims are not broadcast compatible with rhs. does not explicitly validate either layout. the result for invalid layouts with broadcast compatible dims is unspecified
+	/// try broadcasting the layout to the given shape, panicing if the dims are not broadcast compatible with rhs. panics if the current or resulting layout is invalid. Note that this is a symmetric broadcast rather than a to broadcast
 	pub fn broadcast<D:AsRef<[usize]>>(&mut self,rhs:D)->&mut Self{error::unwrap_or_panic(self.try_broadcast(rhs))}
+	/// checks if a layout has a valid combination of dims and strides
+	/// this function verifies:
+	/// - dims and strides have matching ranks
+	/// - count does not overflow usize
+	/// - dims do not overflow isize
+	/// - the required buffer len does not overflow isize
+	pub fn check(&self)->Result<()>{error::check_layout(self.dims(),self.strides()).map_err(|e|e.with_layout(self.clone()))}
+	/// check if a layout has a valid combination of dims and strides and won't alias its components. Rather than enumerating tensor positions, it checks axes' strides and detects overlap using the least common multiple of stride magnitudes.
+	/// this function verifies:
+	/// - dims and strides have matching ranks
+	/// - count does not overflow usize
+	/// - dims do not overflow isize
+	/// - the required buffer len does not overflow isize
+	/// - the required buffer len is within bufferlen
+	/// - no two positions would map to the same component offset within the tensor buffer
+	pub fn check_mut(&self)->Result<()>{error::check_layout_mut(self.dims(),self.strides()).map_err(|e|e.with_layout(self.clone()))}
 	#[track_caller]
 	/// computes the linear buffer offset for the position. Panics if position is out of bounds.
 	pub fn compute_offset<I:SignedIndexPosition>(&self,position:&[I])->usize{position::compute_offset(self.dims(),position,self.strides())}
@@ -43,17 +59,17 @@ impl Layout{
 	/// references the dims. Note that setting dims or strides may affect the validity of the layout.
 	pub fn dims_mut(&mut self)->&mut [usize]{&mut Arc::make_mut(&mut self.inner).0}
 	#[track_caller]
-	/// reverse the order of components along all axes except the one at the index. panics if the index is out of bounds
+	/// reverse the order of components along all axes except the one at the index. panics if the index is out of bounds. does not check or change validity
 	pub fn flip_around(&mut self,index:impl SignedIndexPosition)->&mut Self{self.flip_dim(index).flip()}
 	#[track_caller]
-	/// reverse the order of components along the axis. panics if the index is out of bounds
+	/// reverse the order of components along the axis. panics if the index is out of bounds. does not check or change validity
 	pub fn flip_dim(&mut self,index:impl SignedIndexPosition)->&mut Self{
 		let index=self.normalize_index(index);
 
 		self.strides_mut()[index]*=-1;
 		self
 	}
-	/// reverse the order of components along all axes
+	/// reverse the order of components along all axes. does not check or change validity
 	pub fn flip(&mut self)->&mut Self{
 		for s in self.strides_mut().iter_mut(){*s*=-1}
 		self
@@ -68,6 +84,11 @@ impl Layout{
 	#[track_caller]
 	/// set the stride of the corresponding axis. panics if out of bounds. Note that setting dims or strides may affect the validity of the layout.
 	pub fn get_stride(&self,index:impl SignedIndexPosition)->isize{self.strides()[self.normalize_index(index)]}
+	/// references the dims. note that most nontrivial functionality expects the lengths of dims and strides to be equal, and for their combination to form a valid layout. violating this invariant may result in panics or unexpected behavior
+	pub fn inner_mut(&mut self)->(&mut Vec<usize>,&mut Vec<isize>){
+		let (d,s)=Arc::make_mut(&mut self.inner);
+		(d,s)
+	}
 	#[track_caller]
 	/// insert a new axis at the index. panics if the dim exceeds isize::MAX, or if the index is out of bounds of rank+1. This is operation may affect layout validity.
 	pub fn insert_axis(&mut self,index:impl SignedIndexPosition,dim:usize,stride:isize){
@@ -93,12 +114,6 @@ impl Layout{
 									// Ensure reuse of the normalized index as opposed to the original to guard against poorly behaved TryFrom implementations
 		Arc::make_mut(&mut self.inner).1.insert(index,stride)
 	}
-
-	/// references the dims. note that most nontrivial functionality expects the lengths of dims and strides to be equal, and for their combination to form a valid layout. violating this invariant may result in panics or unexpected behavior
-	pub fn inner_mut(&mut self)->(&mut Vec<usize>,&mut Vec<isize>){
-		let (d,s)=Arc::make_mut(&mut self.inner);
-		(d,s)
-	}
 	/// converts into the dims
 	pub fn into_dims(self)->Vec<usize>{
 		if Arc::strong_count(&self.inner)==1{
@@ -117,15 +132,16 @@ impl Layout{
 	}
 	/// checks if the dims contain 0
 	pub fn is_empty(&self)->bool{self.dims().contains(&0)}
-	/// checks if the layout is normalized, returning true if it is and false if it isn't. also returns false if the layout is invalid. A layout is considered normalized if and only if mapping a lexiconographic iteration over the indices to components would iterate over the same components in the same order as iterating over the underlying buffer. Normalizing a layout may require normalizing the buffer too.
+	/// checks if the layout is normalized, returning true if it is and false if it isn't. also returns false if the layout is invalid. A layout is considered normalized if and only if mapping a row-major iteration over the indices to components would iterate over the same components in the same order as iterating over the underlying buffer. Normalizing a layout may require normalizing the buffer too.
 	pub fn is_normalized(&self)->bool{
 		let mut acc:usize=1;
 		if self.dims().len()!=self.strides().len(){return false}
-									// the normalization condition generally equivalent to whether each stride is equal to the product of all the dims after it
+									// the normalization condition generally equivalent to whether each stride of a non signleton dim is equal to the product of all the dims after it
 		for (&d,&s) in self.dims().iter().rev().zip(self.strides().iter().rev()){
+			if d==1{continue}
 			if acc as isize!=s{return false}
+									// if the product of dims is greater than isize::MAX, the only way this could be a valid layout is with a broadcast, which would not be considered normalized. return false because the layout is invalid
 			acc=acc.saturating_mul(d);
-									// if the product of dims is greater than isize::MAX, the only way this could be a valid layout is with a broadcast, which would not be considered normalized
 			if acc>isize::MAX as usize{return false}
 		}
 		true
@@ -199,8 +215,11 @@ impl Layout{
 		Arc::make_mut(&mut self.inner).1[index]=stride
 	}
 	#[track_caller]
-	/// slice dim
+	/// Restricts an axis to the specified range, and advances an offset accordingly. The resulting layout represents a view of the selected subrange. Panics if the axis index or slice bounds are invalid.
 	pub fn slice_dim<I:SignedIndexPosition>(&mut self,index:impl SignedIndexPosition,offset:&mut usize,range:impl RangeBounds<I>)->&mut Self{
+		error::unwrap_or_panic(self.check().map_err(|e|e.with_op("slice")));
+		let index=self.normalize_index(index);
+
 		let (dim,stride)=(self.get_dim(index),self.get_stride(index));
 		let start=match range.start_bound(){
 			Bound::Excluded(&px)=>position::unsign_range_bound(dim,px).expect("range should be in bounds of the dim")+1,
@@ -214,21 +233,20 @@ impl Layout{
 		};
 
 		let dims=self.dims_mut();
-		let index=position::unsign_index(index,dims.len()).unwrap();
 
-		dims[index]=stop-start;
-		*offset+=if stride<0{dim-stop}else{start}*stride.abs() as usize;
+		dims[index]=stop.checked_sub(start).expect("slice start should not exceed slice end");
+		*offset+=(if stride<0{dim-stop}else{start}*stride.abs() as usize).clamp(0,self.len());
 
 		self
 	}
 	#[track_caller]
-	/// compute the layout resulting from a slice operation
+	/// Restrict each axis to the corresponding range, and advances an offset accordingly. The resulting layout represents a view of the selected subrange. Panics if the layout or slice bounds are invalid.
 	pub fn slice<I:SignedIndexPosition,R:RangeBounds<I>>(&mut self,offset:&mut usize,ranges:&[R])->&mut Self{error::unwrap_or_panic(self.try_slice(offset,ranges))}
 	#[track_caller]
-	/// squeeze an axis of dim 1 into nonexistence. panics if the dim at the index is not equal to 1. panics if out of bounds of the rank
+	/// squeeze an axis of dim 1 into nonexistence. Panics if the specified axis does not have dimension 1 or if the index is out of bounds.
 	pub fn squeeze_dim(&mut self,index:impl SignedIndexPosition)->&mut Self{
 		error::unwrap_or_panic(self.check());
-									// normalize index before checking rhs to always panic if the index is out of bounds. Ensure reuse of the normalized index as opposed to the original to guard against poorly behaved TryFrom implementations
+												// normalize index before checking rhs to always panic if the index is out of bounds. Ensure reuse of the normalized index as opposed to the original to guard against poorly behaved TryFrom implementations
 		let index=self.normalize_index(index);
 		assert_eq!(self.dims()[index],1);
 
@@ -240,33 +258,38 @@ impl Layout{
 	/// references the strides. Note that setting dims or strides may affect the validity of the layout.
 	pub fn strides_mut(&mut self)->&mut [isize]{&mut Arc::make_mut(&mut self.inner).1}
 	#[track_caller]
-	/// swap a pair of axes
+	/// swap a pair of axes. Does not change the layout's validity. Panics if dims and strides have unequal ranks
 	pub fn swap_dims(&mut self,a:impl SignedIndexPosition,b:impl SignedIndexPosition)->&mut Self{
 		assert_eq!(self.dims().len(),self.strides().len());
-
-		let rank=self.dims().len();
-		let (ax,bx)=(if let Some(ix)=position::unsign_index(a,rank){ix}else{panic!("index {} is out of bounds for rank {rank}",a.expect_isize("must be able to convert index to isize"))},if let Some(ix)=position::unsign_index(b,rank){ix}else{panic!("index {} is out of bounds for rank {rank}",b.expect_isize("must be able to convert index to isize"))});
+		let (ax,bx)=(self.normalize_index(a),self.normalize_index(b));
 
 		self.dims_mut   ().swap(ax,bx);
 		self.strides_mut().swap(ax,bx);
 		self
 	}
-	/// try broadcasting the dims, returning an error if the dims are not broadcast compatible with rhs
+	#[track_caller]
+	/// swap the last 2 axes. Does not change the layout's validity. Panics if dims and strides have unequal ranks, or if the rank is less than 2.
+	pub fn transpose(&mut self)->&mut Self{
+		assert!(self.rank()>=2);
+		self.swap_dims(-1,-2)
+	}
+	/// try broadcasting the layout to the given shape, returning an error if the dims are not broadcast compatible with rhs. also returns an error if the current or resulting layout is invalid. Note that this is a symmetric broadcast rather than a to broadcast
 	pub fn try_broadcast<D:AsRef<[usize]>>(&mut self,rhs:D)->Result<&mut Self>{
 		self.check().map_err(|e|e.with_op("broadcast"))?;
 
-		let rhs=rhs.as_ref();
-		if self.rank()!=rhs.len(){return Err(Error::rank_mismatch(self.clone(),"broadcast",error::diagnostic_shape(rhs)))}
-
 		let (mut dims,mut strides)=self.clone().into_inner();
-		for ix in 0..rhs.len(){
-			let dim=dims[ix];
-			let rdm=rhs [ix];
+		let lrank=self.rank();
+		let rhs=rhs.as_ref();
+		let rrank=rhs.len();
 
-			if rdm==1{continue}
-			if dim==1{
-				dims   [ix]=rdm;
-				strides[ix]=0;
+		dims   .splice(0..0,(lrank..rrank).map(|_|1));
+		strides.splice(0..0,(lrank..rrank).map(|_|0));
+
+		for ((dim,stride),rdm) in dims.iter_mut().rev().zip(strides.iter_mut().rev()).zip(rhs.iter().rev()){
+			if *rdm==1{continue}
+			if *dim==1{
+				*dim   =*rdm;
+				*stride=0;
 			}else if dim!=rdm{
 				return Err(Error::broadcast_mismatch(self.clone(),"broadcast",error::diagnostic_shape(rhs)));
 			}
@@ -282,12 +305,12 @@ impl Layout{
 	pub fn try_new<D:AsRef<[usize]>>(dims:D)->Result<Self>{
 		let dims=dims.as_ref();
 		error::check_dims(dims).map_err(|e|e.with_op("new"))?;
-
+									// allocate fields
 		let mut acc:usize=1;
 		let dims=dims.to_vec();
 		let rank=dims.len();
 		let mut strides=vec![0;rank];
-
+									// for a normalized layout, each stride is equal to the product of the dims after its axis
 		for ix in (0..rank).rev(){
 			strides[ix]=acc as isize;
 			acc*=dims[ix];
@@ -302,8 +325,10 @@ impl Layout{
 
 		position::unsign_index(index,rank).ok_or_else(||Error::invalid_index(self.clone(),index,"unsign"))
 	}
-	/// try to compute the layout resulting from a slice operation, returning an error if the ranges are out of bounds of the dims+1, or if any range start is beyond its stop. does not validate the layout itself. The offset will only be accumulated if the result is Ok
+	/// Restrict each axis to the corresponding range, and advances an offset accordingly. The resulting layout represents a view of the selected subrange. Returns Err if the layout or slice bounds are invalid. The offset is increased by at most layout.len()
 	pub fn try_slice<I:SignedIndexPosition,R:RangeBounds<I>>(&mut self,offset:&mut usize,ranges:&[R])->Result<&mut Self>{
+		self.check().map_err(|e|e.with_op("slice"))?;
+
 		let (dims,strides)=(self.dims(),self.strides());
 		let rank=ranges.len();
 																// check rank
@@ -312,7 +337,7 @@ impl Layout{
 																// create temp vectors which can later be reused as new dims and strides for the subview
 		let mut newdims :Vec<usize>=vec![0;rank];
 		let mut position:Vec<isize>=vec![0;rank];
-																// check end bound
+																// check end bound. newdims stores dim+1 values and position stores end bound values so that end bounds can be validated with check_bounds.
 		for ix in 0..rank{
 			let dim=dims[ix];
 			let px=match ranges[ix].end_bound().map(|&x|x.try_into()){
@@ -326,7 +351,7 @@ impl Layout{
 			position[ix]=px;
 		}
 		error::check_bounds(&newdims,&position).map_err(|e|e.with_layout(self.clone()).with_op("slice"))?;
-																// check start bound
+																// check start bound. newdims is repurposed to store normalized end+1 values and position to store start bound values so that start<=end, or equivalently start<=end+1 bounds can be validated with check_bounds.
 		for ix in 0..rank{
 			let dim=dims[ix];
 			let px=match ranges[ix].start_bound().map(|&x|x.try_into()){
@@ -340,7 +365,7 @@ impl Layout{
 			position[ix]=px;
 		}
 		error::check_bounds(&newdims,&position).map_err(|e|e.with_layout(self.clone()).with_op("slice"))?;
-																// now that bounds are checked correct newdims to the dims of the resulting layout
+																// now that bounds are checked, repurpose newdims to store the resulting dimensions, and position to store the least offset component
 		for ix in 0..rank{
 			let dim=dims[ix];
 			let start=position[ix];
@@ -349,9 +374,9 @@ impl Layout{
 
 			newdims[ix]=stop-position::unsign_range_bound(dim,start).unwrap();
 			if stride<0{position[ix]=(dim-stop) as isize}
-		}
+		}														// Empty slices at the high end of the tensor may compute offsets beyond the final accessible component. Clamp them to one past the end so ptr+offset stays within the original allocation's provenance.
 		*offset+=position::compute_offset(dims,&position,strides).clamp(0,self.len());
-																// create new layout
+																// create new layout. The final repurpose of the position allocation is to store the strides.
 		position.copy_from_slice(strides);
 		*self=Self::from_inner(newdims,position);
 
@@ -365,30 +390,13 @@ impl Layout{
 		self.insert_axis(index,1,1);
 		self
 	}
-
 	/// checks if a layout has a valid combination of dims and strides
 	/// this function verifies:
-	/// dims and strides have matching ranks
-	/// count does not overflow usize
-	/// dims do not overflow isize
-	/// the required buffer len does not overflow isize
-	pub fn check(&self)->Result<()>{error::check_layout(self.dims(),self.strides()).map_err(|e|e.with_layout(self.clone()))}
-	/// check if a layout has a valid combination of dims and strides and won't alias its components. Rather than enumerating tensor positions, it checks axis's strides and detects overlap using the least common multiple of stride magnitudes.
-	/// this function verifies:
-	/// dims and strides have matching ranks
-	/// count does not overflow usize
-	/// dims do not overflow isize
-	/// the required buffer len does not overflow isize
-	/// the required buffer len is within bufferlen
-	/// no two positions would map to the same component offset within the tensor buffer
-	pub fn check_mut(&self)->Result<()>{error::check_layout_mut(self.dims(),self.strides()).map_err(|e|e.with_layout(self.clone()))}
-	/// checks if a layout has a valid combination of dims and strides
-	/// this function verifies:
-	/// dims and strides have matching ranks
-	/// count does not overflow usize
-	/// dims do not overflow isize
-	/// the required buffer len does not overflow isize
-	/// the required buffer len is within bufferlen
+	/// - dims and strides have matching ranks
+	/// - count does not overflow usize
+	/// - dims do not overflow isize
+	/// - the required buffer len does not overflow isize
+	/// - the required buffer len is within bufferlen
 	pub fn validate(&self,bufferlen:usize)->Result<()>{
 		error::check_layout(self.dims(),self.strides()).map_err(|e|e.with_op("validate"))?;
 		let len=self.len();
@@ -396,14 +404,14 @@ impl Layout{
 		if bufferlen<len{return Err(Error::buffer_too_small(self.clone(),bufferlen,len,"validate"))}
 		Ok(())
 	}
-	/// check if a layout has a valid combination of dims and strides and won't alias its components. Rather than enumerating tensor positions, it checks axis's strides and detects overlap using the least common multiple of stride magnitudes.
+	/// check if a layout has a valid combination of dims and strides and won't alias its components. Rather than enumerating tensor positions, it checks axes' strides and detects overlap using the least common multiple of stride magnitudes.
 	/// this function verifies:
-	/// dims and strides have matching ranks
-	/// count does not overflow usize
-	/// dims do not overflow isize
-	/// the required buffer len does not overflow isize
-	/// the required buffer len is within bufferlen
-	/// no two positions would map to the same component offset within the tensor buffer
+	/// - dims and strides have matching ranks
+	/// - count does not overflow usize
+	/// - dims do not overflow isize
+	/// - the required buffer len does not overflow isize
+	/// - the required buffer len is within bufferlen
+	/// - no two positions would map to the same component offset within the tensor buffer
 	pub fn validate_mut(&self,bufferlen:usize)->Result<()>{
 		error::check_layout_mut(self.dims(),self.strides()).map_err(|e|e.with_layout(self.clone()).with_op("validate"))?;
 		let len=self.len();
