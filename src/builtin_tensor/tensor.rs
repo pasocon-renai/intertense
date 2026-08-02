@@ -403,6 +403,12 @@ impl<E> Tensor<E>{
 		self
 	}
 	#[track_caller]
+	/// transpose the last two axes. panics if rank is less than two
+	pub fn transpose(mut self)->Self{
+		self.0.transpose();
+		self
+	}
+	#[track_caller]
 	/// stack a collection of tensors along the specified axis
 	pub fn stack<I:IntoIterator>(collection:I,index:impl SignedIndexPosition)->Self where I::Item:Into<Self>{error::unwrap_or_panic(Self::try_stack(collection,index))}
 	#[track_caller]
@@ -776,6 +782,12 @@ impl<E> Tens<E>{
 	pub fn tensor(self)->Tensor<E>{
 		error::unwrap_or_panic(self.layout().validate_mut(self.buffer_len()).map_err(|e|e.with_op("tensor")));
 		Tensor(self)
+	}
+	#[track_caller]
+	/// swap the last two axes. panics if rank is less than two
+	pub fn transpose(&mut self)->&mut Self{
+		self.layout.transpose();
+		self
 	}
 	/// moves the components of other into self, concatenating along the specified axis. no broadcasting is performed. the operation will return Err if either tensor is invalid, or if the dimensions aside from at the index don't match.
 	pub fn try_append<I:SignedIndexPosition>(&mut self,b:&mut Tens<E>,index:I)->Result<&mut Self>{
