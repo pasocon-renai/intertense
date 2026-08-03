@@ -357,7 +357,7 @@ impl Layout{
 			let px=match ranges[ix].start_bound().map(|&x|x.try_into()){
 				Bound::Excluded(Ok(px))=>if px==-1{dim as isize}else{px+1},
 				Bound::Included(Ok(px))=>px,
-				Bound::Unbounded=>dim as isize,
+				Bound::Unbounded=>0,
 				_=>return Err(Error::out_of_bounds(self.clone(),"slice",Default::default()))
 			};
 
