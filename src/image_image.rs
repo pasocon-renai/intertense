@@ -10,8 +10,8 @@ impl<C:Deref<Target=[P::Subpixel]>,P:Pixel> From<&ImageBuffer<P,C>> for Tensor<P
 		assert_eq!(channels*height*width,data.len());
 		let mut tensor=Tensor::new(data,dims);
 
-		tensor.swap_dims(0,2);
-		tensor.swap_dims(1,2);
+		tensor=tensor.swap_dims(0,2);
+		tensor=tensor.swap_dims(1,2);
 		tensor
 	}
 }
@@ -19,7 +19,7 @@ impl<C:Deref<Target=[P::Subpixel]>,P:Pixel> From<ImageBuffer<P,C>> for Tensor<P:
 	fn from(image:ImageBuffer<P,C>)->Self{Self::from(&image)}
 }
 
-use crate::builtin_tensor::Tensor;
+use crate::builtin_tensor::tensor::Tensor;
 use image::{ImageBuffer,Pixel};
 use std::ops::Deref;
 
