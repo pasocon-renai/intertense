@@ -12,5 +12,5 @@ pub mod tensor;
 pub mod view;
 
 pub use {
-	error::{Error,Result},position::{PositionIter,Position},layout::Layout,tensor::Tens,view::View
+	error::{Error,Result},position::{PositionIter,Position},layout::Layout,tensor::{Tens,Tensor},view::View
 };
