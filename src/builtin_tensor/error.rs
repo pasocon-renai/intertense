@@ -99,6 +99,27 @@ impl Error{
 	pub fn other<E:'static+StdError>(error:E,layout:Layout,op:&'static str,rhslayout:impl Into<Option<Layout>>)->Self{
 		Self::new(layout,ErrorKind::Other(Arc::new(error)),op,rhslayout.into())
 	}
+	/// create another error
+	pub fn other_str(error:impl AsRef<str>,layout:Layout,op:&'static str,rhslayout:impl Into<Option<Layout>>)->Self{
+		Self::new(layout,ErrorKind::Other(Arc::new(// *sigh*
+		/*Box::<dyn std::error::Error>::from(str.as_ref())*/
+		{// use the implementation from std since box dyn error isn't error for some reason
+			#[derive(Debug)]
+			struct StringError(String);
+
+			impl std::error::Error for StringError {
+				fn description(&self) -> &str { &self.0 }
+			}
+
+			impl std::fmt::Display for StringError {
+				fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+					self.0.fmt(f)
+				}
+			}
+
+			StringError(error.as_ref().to_string())
+		})),op,rhslayout.into())
+	}
 	/// create an index error
 	pub fn out_of_bounds(layout:Layout,op:&'static str,position:Position)->Self{
 		Self::new(layout,ErrorKind::OutOfBounds(position),op,None)
