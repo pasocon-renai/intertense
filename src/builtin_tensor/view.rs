@@ -936,6 +936,53 @@ pub struct ViewMut<'a,E:'a>(Tens<E>,PhantomData<&'a E>);
 /// A dynamically-sized view into a multidimensional sequence. Layout validity is lazily checked, and producing a View with a layout invalid for its buffer is allowed, but failing to maintain shared validity may lead to panics or unexpected behavior of some functions.
 pub struct View<E>([Tens<E>]);// Do not make Sized. Although it looks like this could be Sized as all usages of it currently have the same dynamic size, implementing Sized for this would be unsound. See mem::swap. It would be nicer to make this less fake by making it a slice of MaybeUninit<E> with layout fields at the beginning, but after experimenting with that I've found it has questionable soundess implications for mutable view splitting. Maybe I'll think of a better way next time I refactor this library
 
+#[cfg(test)]
+mod tests{
+	#[test]
+	fn is_layout_normalized_predicate(){
+		// the fast-path gate is exactly layout.is_normalized && count==buffer_len
+		let noncanonical=Tens::from_inner(vec![101,102,201,202,301,302,111,112,211,212,311,312],Layout::from_inner(vec![3,2,2],vec![2,6,1]));
+		let canonical=Tens::from_inner(vec![101,102,111,112,201,202,211,212,301,302,311,312],Layout::new([3,2,2]));
+
+		assert!(!noncanonical.is_layout_normalized());
+		assert!(canonical.is_layout_normalized());
+	}
+	#[test]
+	fn map_logical_order_both_paths(){
+		// the normalized (fast) and non-normalized (slow) iteration must yield the same logical order
+		let noncanonical=Tens::from_inner(vec![101,102,201,202,301,302,111,112,211,212,311,312],Layout::from_inner(vec![3,2,2],vec![2,6,1]));
+		let canonical=Tens::from_inner(vec![101,102,111,112,201,202,211,212,301,302,311,312],Layout::new([3,2,2]));
+		let expected=[1101,1102,1111,1112,1201,1202,1211,1212,1301,1302,1311,1312];
+
+		let fast=canonical.as_view().map(|x|*x+1000);
+		let slow=noncanonical.as_view().map(|x|*x+1000);
+
+		assert_eq!(fast.buffer(),expected);
+		assert_eq!(slow.buffer(),expected);
+		assert_eq!(fast,slow);
+	}
+	#[test]
+	fn map_in_place_normalized_fast_path(){
+		let mut t=Tens::from_inner(vec![1,2,3,4,5,6],Layout::new([2,3]));
+
+		t.as_mut_view().map_in_place(|x|*x*=10);
+		assert_eq!(t.buffer(),[10,20,30,40,50,60]);
+
+		let mut seen:Vec<i32>=Vec::new();
+		t.as_view().for_each(|x|seen.push(*x));
+		assert_eq!(seen,[10,20,30,40,50,60]);
+	}
+	#[test]
+	fn map_in_place_nonnormalized_slow_path(){
+		let mut t=Tens::from_inner(vec![101,102,201,202,301,302,111,112,211,212,311,312],Layout::from_inner(vec![3,2,2],vec![2,6,1]));
+
+		t.as_mut_view().map_in_place(|x|*x+=1);
+		assert_eq!(t.buffer(),[102,103,202,203,302,303,112,113,212,213,312,313]);
+	}
+
+	use super::*;
+}
+
 use std::{
 	borrow::{Borrow,BorrowMut,ToOwned},cmp::{Eq,PartialEq},fmt::{Debug,Formatter,Result as FmtResult},hash::{Hash,Hasher},marker::PhantomData,ops::{Deref,DerefMut,Index,IndexMut,RangeBounds},slice
 };

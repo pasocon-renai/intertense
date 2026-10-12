@@ -675,7 +675,7 @@ impl<E> Tens<E>{
 	/// swap out the buffer.  Note that producing a Tens with a layout not mutably valid for its buffer is allowed, but may lead to incorrect behavior or panics on functions that assume layout validity
 	pub fn replace_buffer(&mut self,mut replacement:Vec<E>)->Vec<E>{
 		unsafe{		// safety: postcondition of Self::_from_raw_parts: When (ptr, len, cap) are not ok to put in Vec::from_raw_parts (borrowed buffer case), the resulting Tens must never convert its buffer to a slice or vec. Ensure all construction goes through _from_raw_parts.
-			let old=Vec::from_raw_parts(mem::replace(&mut self.ptr,replacement.as_mut_ptr()),mem::replace(&mut self.len,replacement.len()),mem::replace(&mut self.cap,replacement.len()));
+			let old=Vec::from_raw_parts(mem::replace(&mut self.ptr,replacement.as_mut_ptr()),mem::replace(&mut self.len,replacement.len()),mem::replace(&mut self.cap,replacement.capacity()));
 			mem::forget(replacement);
 
 			old
@@ -846,6 +846,15 @@ mod serial{
 			Ok(Tens::from_inner(t.data,t.layout))
 		}
 	}
+	impl<'a,E:Deserialize<'a>> Deserialize<'a> for Tensor<E>{
+		fn deserialize<D:Deserializer<'a>>(deserializer:D)->StdResult<Self,D::Error>{
+			#[derive(Deserialize)]
+			struct Data<E>{data:Vec<E>,layout:Layout}
+			let t=Data::deserialize(deserializer)?;
+
+			Ok(Tens::from_inner(t.data,t.layout).try_into().map_err(|e:TensorError|DError::custom(e))?)
+		}
+	}
 	impl<E:Serialize> Serialize for Tens<E>{
 		fn serialize<S:Serializer>(&self,serializer:S)->StdResult<S::Ok,S::Error>{
 			#[derive(Serialize)]
@@ -853,10 +862,17 @@ mod serial{
 			Data{data:self.buffer(),layout:self.get_layout()}.serialize(serializer)
 		}
 	}
+	impl<E:Serialize> Serialize for Tensor<E>{
+		fn serialize<S:Serializer>(&self,serializer:S)->StdResult<S::Ok,S::Error>{
+			#[derive(Serialize)]
+			struct Data<'a,E:'a>{data:&'a [E],layout:Layout}
+			Data{data:self.buffer(),layout:self.get_layout()}.serialize(serializer)
+		}
+	}
 
-	use serde::{Deserialize,Deserializer,Serialize,Serializer};
+	use serde::{Deserialize,Deserializer,Serialize,Serializer,de::Error as DError};
 	use std::{result::Result as StdResult};
-	use super::{Layout,Tens};
+	use super::{Layout,Tens,Tensor,error::Error as TensorError};
 }
 #[cfg(test)]
 mod tests{

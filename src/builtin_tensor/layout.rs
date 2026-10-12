@@ -136,12 +136,11 @@ impl Layout{
 	pub fn is_normalized(&self)->bool{
 		let mut acc:usize=1;
 		if self.dims().len()!=self.strides().len(){return false}
-									// the normalization condition generally equivalent to whether each stride of a non signleton dim is equal to the product of all the dims after it
+									// the normalization condition generally equivalent to whether each stride is equal to the product of all the dims after it
 		for (&d,&s) in self.dims().iter().rev().zip(self.strides().iter().rev()){
-			if d==1{continue}
 			if acc as isize!=s{return false}
-									// if the product of dims is greater than isize::MAX, the only way this could be a valid layout is with a broadcast, which would not be considered normalized. return false because the layout is invalid
 			acc=acc.saturating_mul(d);
+									// if the product of dims is greater than isize::MAX, the only way this could be a valid layout is with a broadcast, which would not be considered normalized
 			if acc>isize::MAX as usize{return false}
 		}
 		true
@@ -526,6 +525,59 @@ pub enum Validity{
 /// It does not contain an offset as owned tensors are eagerly trimmed and tensor views offset their pointers rather than their layouts.
 /// Layouts have 2 varying degrees of validity. A layout may have either no validity (invalid), shared validity (shared-valid), or mutable validity (mut-valid), with the difference between shared-valid and mut-valid being that mut-valid layouts are not allowed to have multiple positions refer to the same component. A layout is considered invalid if any of its dims exceed isize::MAX, if their product exceeds usize::MAX, if its buffer length overflows isize, or if its dims and strides have mismatched ranks. Layouts that are not invalid are considered 'valid', however, a valid layout is only 'valid for' buffer lengths greater than the greatest component offset of a tensor with that layout.
 pub struct Layout{inner:Arc<(Vec<usize>,Vec<isize>)>}
+#[cfg(test)]
+mod tests{
+	#[test]
+	fn is_normalized_canonical(){
+		assert!(Layout::scalar().is_normalized());
+		assert!(Layout::new([3]).is_normalized());
+		assert!(Layout::new([2,3]).is_normalized());
+		assert!(Layout::new([2,3,4]).is_normalized());
+		assert!(Layout::new([1,2,1,3]).is_normalized());
+	}
+	#[test]
+	fn is_normalized_regression_singleton_stride(){
+		// a size-1 axis inserted with stride 1 in the middle of the rank is not canonical
+		// the buggy is_normalized reported these as normalized, which broke sheet loading
+		let mut layout=Layout::new([2,3]);
+		layout.unsqueeze_dim(0);
+
+		assert_eq!(layout.dims(),[1,2,3]);
+		assert_eq!(layout.strides(),[1,3,1]);
+		assert!(!layout.is_normalized());
+	}
+	#[test]
+	fn is_normalized_singleton_at_end_is_canonical(){
+		// the same insertion keeps canonicity when the size-1 axis lands at the end of the rank
+		let mut layout=Layout::new([2,3]);
+		layout.unsqueeze_dim(2);
+
+		assert_eq!(layout.dims(),[2,3,1]);
+		assert_eq!(layout.strides(),[3,1,1]);
+		assert!(layout.is_normalized());
+	}
+	#[test]
+	fn is_normalized_noncanonical(){
+		assert!(!Layout::from_inner(vec![3,2],vec![1,3]).is_normalized());
+		assert!(!Layout::from_inner(vec![1,2,3],vec![1,3,1]).is_normalized());
+		assert!(!Layout::from_inner(vec![2,3],vec![3,1,1]).is_normalized());
+	}
+	#[test]
+	fn is_normalized_overflow(){
+		// an element count above isize::MAX can't be canonicalized into an isize stride space
+		assert!(!Layout::from_inner(vec![1usize<<63,1],vec![1,1]).is_normalized());
+	}
+	#[test]
+	fn new_canonical_strides(){
+		assert_eq!(Layout::new([2,3,4]).strides(),[12,4,1]);
+		assert_eq!(Layout::new([1,2,1,3]).strides(),[6,3,3,1]);
+		assert_eq!(Layout::new([5]).strides(),[1]);
+		assert!(Layout::scalar().strides().is_empty());
+		assert!(Layout::scalar().dims().is_empty());
+	}
+
+	use super::*;
+}
 
 use std::{
 	ops::{Bound,RangeBounds},sync::Arc
